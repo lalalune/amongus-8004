@@ -3,48 +3,55 @@
  * Handles all A2A protocol requests and integrates with game engine
  */
 
+import type { GameEvent } from '@elizagames/shared';
+import { ethers } from 'ethers';
 import type { Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import { ethers } from 'ethers';
-import type { GameEngine } from '../game/engine.js';
 import type { ERC8004Registry } from '../blockchain/registry.js';
-import { StreamingManager, setupSSEResponse } from './streaming.js';
+import type { GameEngine } from '../game/engine.js';
+import { GameSessionsManager } from '../game/sessions.js';
 import { executeSkill, extractSkillId } from './skills.js';
+import { StreamingManager, setupSSEResponse } from './streaming.js';
 import type {
   JSONRPCRequest,
-  JSONRPCResponse,
+  Message,
   MessageSendParams,
-  TaskQueryParams,
   TaskIdParams,
-  Task,
-  Message
+  TaskQueryParams
 } from './types.js';
 import {
-  createSuccessResponse,
+  A2A_ERROR_CODES,
+  createDataPart,
   createErrorResponse,
   createMessage,
-  createTask,
-  createTextPart,
-  createDataPart,
   createStatusUpdateEvent,
-  createArtifactUpdateEvent,
-  A2A_ERROR_CODES
+  createSuccessResponse,
+  createTask,
+  createTextPart
 } from './types.js';
-import type { GameEvent } from '@elizagames/shared';
 
 export class A2AServer {
   private engine: GameEngine;
   private registry: ERC8004Registry;
   private streaming: StreamingManager;
-  private activeTasks: Map<string, { agentId: string; contextId: string }> = new Map();
+  private activeTasks: Map<string, { agentId: string; contextId: string; gameId?: string }> = new Map();
+  private sessions?: GameSessionsManager;
+  private agentBindings: Map<string, string> = new Map(); // agentId -> agentAddress
+  private seenMessageIds: Map<string, number> = new Map(); // messageId -> timestamp
 
-  constructor(engine: GameEngine, registry: ERC8004Registry) {
+  constructor(engine: GameEngine, registry: ERC8004Registry, sessions?: GameSessionsManager) {
     this.engine = engine;
     this.registry = registry;
     this.streaming = new StreamingManager();
+    this.sessions = sessions;
 
     // Subscribe to game events for broadcasting
-    this.engine.onEvent((event) => this.handleGameEvent(event));
+    this.subscribeEngine(this.engine);
+
+    // Subscribe to newly created sessions for event forwarding
+    if (this.sessions && 'onNewSession' in this.sessions) {
+      (this.sessions as any).onNewSession((engine: GameEngine) => this.subscribeEngine(engine));
+    }
   }
 
   // ============================================================================
@@ -157,6 +164,39 @@ export class A2AServer {
       return;
     }
 
+    // Prevent duplicate message IDs (basic replay protection even within allowed window)
+    if (this.seenMessageIds.has(message.messageId)) {
+      res.json(
+        createErrorResponse(
+          request.id ?? null,
+          A2A_ERROR_CODES.INVALID_REQUEST,
+          'Duplicate messageId detected'
+        )
+      );
+      return;
+    }
+    this.seenMessageIds.set(message.messageId, Date.now());
+    // Opportunistic cleanup of old entries (>10 minutes)
+    if (this.seenMessageIds.size > 1000) {
+      const cutoff = Date.now() - 10 * 60 * 1000;
+      for (const [mid, ts] of this.seenMessageIds.entries()) {
+        if (ts < cutoff) this.seenMessageIds.delete(mid);
+      }
+    }
+
+    // Enforce agentId<->address binding
+    const boundAddress = this.agentBindings.get(agentId);
+    if (boundAddress && boundAddress.toLowerCase() !== signatureValidation.address!.toLowerCase()) {
+      res.json(
+        createErrorResponse(
+          request.id ?? null,
+          A2A_ERROR_CODES.INVALID_PARAMS,
+          `Agent ID is already bound to a different address`
+        )
+      );
+      return;
+    }
+
     // Determine skill
     const skillId = extractSkillId(message);
     
@@ -171,8 +211,55 @@ export class A2AServer {
       return;
     }
 
-    // Execute skill
-    const result = await executeSkill(skillId, this.engine, this.registry, agentId, message);
+    // Resolve engine (single-session fallback if sessions not provided)
+    let targetEngine: GameEngine | null = null;
+    if (this.sessions) {
+      if (skillId === 'join-game') {
+        // Join uses lobby assignment, but prefer existing mapping (or existing presence)
+        targetEngine =
+          this.sessions.getEngineForAgent(agentId) ||
+          this.sessions.getEngineContainingAgent(agentId) ||
+          this.sessions.assignLobby(agentId);
+      } else {
+        // Resolve by mapping; as a fallback heal races by scanning sessions for existing presence
+        targetEngine = this.sessions.getEngineForAgent(agentId) || this.sessions.getEngineContainingAgent(agentId);
+        if (!targetEngine) {
+          res.json(
+            createErrorResponse(
+              request.id ?? null,
+              A2A_ERROR_CODES.INVALID_PARAMS,
+              'Agent is not in a game. Use join-game first.'
+            )
+          );
+          return;
+        }
+      }
+    } else {
+      targetEngine = this.engine;
+    }
+
+    // For join-game, ensure registry info and bind mapping
+    if (skillId === 'join-game') {
+      // Bind mapping now that address is validated
+      if (!boundAddress) {
+        this.agentBindings.set(agentId, signatureValidation.address!);
+      }
+    }
+
+    // Execute skill on target engine
+    const result = await executeSkill(skillId, targetEngine, this.registry, agentId, message);
+
+    // Record API message in game history
+    try {
+      targetEngine.recordApiMessage(
+        agentId,
+        skillId,
+        message.messageId,
+        { message },
+        { result },
+        !!result.success
+      );
+    } catch {}
 
     if (!result.success) {
       res.json(
@@ -190,7 +277,8 @@ export class A2AServer {
     const taskId = message.taskId || uuidv4();
     const contextId = message.contextId || uuidv4();
 
-    this.activeTasks.set(taskId, { agentId, contextId });
+    const gameId = targetEngine.getState().id;
+    this.activeTasks.set(taskId, { agentId, contextId, gameId });
 
     // Setup streaming if requested
     if (streaming) {
@@ -209,15 +297,29 @@ export class A2AServer {
       const responseEvent = createSuccessResponse(request.id ?? null, task);
       res.write(`data: ${JSON.stringify(responseEvent)}\n\n`);
 
-      // If join-game, check auto-start
+      // If join-game, check auto-start and record session mapping
       if (skillId === 'join-game') {
-        const canStart = this.engine.canStartGame();
+        if (this.sessions) {
+          this.sessions.setAgentGame(agentId, gameId);
+        }
+        const canStart = targetEngine.canStartGame();
         if (canStart.canStart) {
-          setTimeout(() => this.engine.startGame(), 2000);
+          setTimeout(() => targetEngine.startGame(), 2000);
+        }
+      } else if (skillId === 'leave-game') {
+        if (this.sessions) {
+          this.sessions.removeAgent(agentId);
         }
       }
     } else {
       // Non-streaming response
+      // For non-streaming join, record mapping BEFORE responding to avoid race with immediate follow-up calls
+      if (skillId === 'join-game') {
+        if (this.sessions) {
+          this.sessions.setAgentGame(agentId, gameId);
+        }
+      }
+
       const responseMessage = createMessage(
         'agent',
         [createTextPart(result.message), ...(result.data ? [createDataPart(result.data)] : [])],
@@ -228,11 +330,15 @@ export class A2AServer {
 
       res.json(createSuccessResponse(request.id ?? null, responseMessage));
 
-      // For non-streaming join, also auto-start if ready
+      // Auto-start and cleanup mapping for leave after responding
       if (skillId === 'join-game') {
-        const canStart = this.engine.canStartGame();
+        const canStart = targetEngine.canStartGame();
         if (canStart.canStart) {
-          setTimeout(() => this.engine.startGame(), 2000);
+          setTimeout(() => targetEngine.startGame(), 2000);
+        }
+      } else if (skillId === 'leave-game') {
+        if (this.sessions) {
+          this.sessions.removeAgent(agentId);
         }
       }
     }
@@ -265,35 +371,58 @@ export class A2AServer {
       return;
     }
 
-    // Optional: verify signed message proves ownership if provided
-    if (params.message) {
-      const validation = await this.verifyMessageSignature(params.message);
-      if (!validation.valid) {
-        res.json(
-          createErrorResponse(
-            request.id ?? null,
-            A2A_ERROR_CODES.INVALID_PARAMS,
-            validation.error || 'Signature verification failed'
-          )
-        );
-        return;
-      }
+    // Require signed message to verify ownership
+    if (!params.message) {
+      res.json(
+        createErrorResponse(
+          request.id ?? null,
+          A2A_ERROR_CODES.INVALID_PARAMS,
+          'Missing signed message'
+        )
+      );
+      return;
+    }
 
-      const messageAgentId = this.extractAgentId(params.message);
-      if (!messageAgentId || messageAgentId !== taskInfo.agentId) {
-        res.json(
-          createErrorResponse(
-            request.id ?? null,
-            A2A_ERROR_CODES.INVALID_PARAMS,
-            'Task does not belong to this agent'
-          )
-        );
-        return;
-      }
+    const validation = await this.verifyMessageSignature(params.message);
+    if (!validation.valid) {
+      res.json(
+        createErrorResponse(
+          request.id ?? null,
+          A2A_ERROR_CODES.INVALID_PARAMS,
+          validation.error || 'Signature verification failed'
+        )
+      );
+      return;
+    }
+
+    const messageAgentId = this.extractAgentId(params.message);
+    if (!messageAgentId || messageAgentId !== taskInfo.agentId) {
+      res.json(
+        createErrorResponse(
+          request.id ?? null,
+          A2A_ERROR_CODES.INVALID_PARAMS,
+          'Task does not belong to this agent'
+        )
+      );
+      return;
+    }
+
+    const bound = this.agentBindings.get(taskInfo.agentId);
+    if (bound && bound.toLowerCase() !== validation.address!.toLowerCase()) {
+      res.json(
+        createErrorResponse(
+          request.id ?? null,
+          A2A_ERROR_CODES.INVALID_PARAMS,
+          'Address does not match task owner'
+        )
+      );
+      return;
     }
 
     // Get current game state for this task
-    const state = this.engine.getState();
+    let engine = this.sessions && taskInfo.gameId ? this.sessions.getEngineById(taskInfo.gameId) : this.engine;
+    if (!engine) engine = this.engine;
+    const state = engine.getState();
     const task = createTask(params.id, taskInfo.contextId, this.mapGamePhaseToTaskState(state.phase));
 
     res.json(createSuccessResponse(request.id ?? null, task));
@@ -326,39 +455,65 @@ export class A2AServer {
       return;
     }
 
-    // Optional: verify signed message proves ownership if provided
-    if (params.message) {
-      const validation = await this.verifyMessageSignature(params.message);
-      if (!validation.valid) {
-        res.json(
-          createErrorResponse(
-            request.id ?? null,
-            A2A_ERROR_CODES.INVALID_PARAMS,
-            validation.error || 'Signature verification failed'
-          )
-        );
-        return;
-      }
+    // Require signed message to verify ownership
+    if (!params.message) {
+      res.json(
+        createErrorResponse(
+          request.id ?? null,
+          A2A_ERROR_CODES.INVALID_PARAMS,
+          'Missing signed message'
+        )
+      );
+      return;
+    }
 
-      const messageAgentId = this.extractAgentId(params.message);
-      if (!messageAgentId || messageAgentId !== taskInfo.agentId) {
-        res.json(
-          createErrorResponse(
-            request.id ?? null,
-            A2A_ERROR_CODES.INVALID_PARAMS,
-            'Task does not belong to this agent'
-          )
-        );
-        return;
-      }
+    const validation = await this.verifyMessageSignature(params.message);
+    if (!validation.valid) {
+      res.json(
+        createErrorResponse(
+          request.id ?? null,
+          A2A_ERROR_CODES.INVALID_PARAMS,
+          validation.error || 'Signature verification failed'
+        )
+      );
+      return;
+    }
+
+    const messageAgentId = this.extractAgentId(params.message);
+    if (!messageAgentId || messageAgentId !== taskInfo.agentId) {
+      res.json(
+        createErrorResponse(
+          request.id ?? null,
+          A2A_ERROR_CODES.INVALID_PARAMS,
+          'Task does not belong to this agent'
+        )
+      );
+      return;
+    }
+
+    const bound = this.agentBindings.get(taskInfo.agentId);
+    if (bound && bound.toLowerCase() !== validation.address!.toLowerCase()) {
+      res.json(
+        createErrorResponse(
+          request.id ?? null,
+          A2A_ERROR_CODES.INVALID_PARAMS,
+          'Address does not match task owner'
+        )
+      );
+      return;
     }
 
     // Remove player from game (leave-game)
-    const removed = this.engine.removePlayer(taskInfo.agentId);
+    let engine = this.sessions && taskInfo.gameId ? this.sessions.getEngineById(taskInfo.gameId) : this.engine;
+    if (!engine) engine = this.engine;
+    const removed = engine.removePlayer(taskInfo.agentId);
 
     if (removed) {
       this.streaming.closeConnection(taskInfo.agentId, params.id);
       this.activeTasks.delete(params.id);
+      if (this.sessions) {
+        this.sessions.removeAgent(taskInfo.agentId);
+      }
 
       const task = createTask(params.id, taskInfo.contextId, 'canceled', 'Left the game');
       res.json(createSuccessResponse(request.id ?? null, task));
@@ -400,6 +555,54 @@ export class A2AServer {
       return;
     }
 
+    // Require signed message to verify ownership
+    if (!params.message) {
+      res.json(
+        createErrorResponse(
+          request.id ?? null,
+          A2A_ERROR_CODES.INVALID_PARAMS,
+          'Missing signed message'
+        )
+      );
+      return;
+    }
+
+    const validation = await this.verifyMessageSignature(params.message);
+    if (!validation.valid) {
+      res.json(
+        createErrorResponse(
+          request.id ?? null,
+          A2A_ERROR_CODES.INVALID_PARAMS,
+          validation.error || 'Signature verification failed'
+        )
+      );
+      return;
+    }
+
+    const messageAgentId = this.extractAgentId(params.message);
+    if (!messageAgentId || messageAgentId !== taskInfo.agentId) {
+      res.json(
+        createErrorResponse(
+          request.id ?? null,
+          A2A_ERROR_CODES.INVALID_PARAMS,
+          'Task does not belong to this agent'
+        )
+      );
+      return;
+    }
+
+    const bound = this.agentBindings.get(taskInfo.agentId);
+    if (bound && bound.toLowerCase() !== validation.address!.toLowerCase()) {
+      res.json(
+        createErrorResponse(
+          request.id ?? null,
+          A2A_ERROR_CODES.INVALID_PARAMS,
+          'Address does not match task owner'
+        )
+      );
+      return;
+    }
+
     // Setup SSE and re-add connection
     setupSSEResponse(res);
 
@@ -412,7 +615,9 @@ export class A2AServer {
     });
 
     // Send current game state
-    const state = this.engine.getState();
+    let engine = this.sessions && taskInfo.gameId ? this.sessions.getEngineById(taskInfo.gameId) : this.engine;
+    if (!engine) engine = this.engine;
+    const state = engine.getState();
     const currentStateEvent = createStatusUpdateEvent(
       params.id,
       taskInfo.contextId,
@@ -430,7 +635,8 @@ export class A2AServer {
 
   private handleGameEvent(event: GameEvent): void {
     // Convert game event to A2A stream event
-    const players = this.engine.getState().players;
+    const engine = this.sessions ? this.sessions.getEngineById(event.gameId) || this.engine : this.engine;
+    const players = engine.getState().players;
 
     // Determine recipients based on visibility
     let recipients: string[];
@@ -451,12 +657,13 @@ export class A2AServer {
       const connections = this.streaming.getConnections(agentId);
       
       for (const conn of connections) {
+        const isFinal = event.type === 'game-ended';
         const statusUpdate = createStatusUpdateEvent(
           conn.taskId,
           conn.contextId,
           'working',
           this.formatGameEventMessage(event),
-          false
+          isFinal
         );
 
         // Add game event data to metadata
@@ -468,6 +675,11 @@ export class A2AServer {
         const sseResponse = createSuccessResponse(conn.requestId, statusUpdate);
         conn.response.write(`data: ${JSON.stringify(sseResponse)}\n\n`);
       }
+    }
+
+    // Cleanup agent mappings on game end
+    if (event.type === 'game-ended' && this.sessions) {
+      this.sessions.cleanupAfterGameEnd(event.gameId);
     }
   }
 
@@ -482,17 +694,23 @@ export class A2AServer {
       case 'role-assigned':
         return `You are a ${event.data.role}${event.data.role === 'imposter' ? ' 🔴' : ' 🔵'}`;
       case 'player-moved':
-        return `Player moved: ${event.data.from} → ${event.data.to}`;
+        return event.data.from && event.data.to ? `Player moved: ${event.data.from} → ${event.data.to}` : 'You moved';
       case 'task-completed':
-        return `✅ Task completed: ${event.data.taskDescription}`;
+        return event.data.taskDescription ? `✅ Task completed: ${event.data.taskDescription}` : '✅ Task completed';
       case 'player-killed':
-        return `💀 A player was killed in ${event.data.location}`;
-      case 'meeting-called':
+        return event.data.location ? `💀 A player was killed in ${event.data.location}` : '💀 A player was killed';
+      case 'emergency-meeting':
         return `🚨 Emergency meeting called!`;
       case 'body-reported':
         return `🚨 Dead body reported!`;
       case 'voting-started':
         return `🗳️ Voting phase started`;
+      case 'vote-cast':
+        return `🗳️ Vote cast (${event.data.voteCount}/${event.data.totalVoters})`;
+      case 'sabotage-triggered':
+        return `🚨 Sabotage: ${event.data.system}${event.data.urgent ? ' (urgent)' : ''}`;
+      case 'vent-used':
+        return event.data.from && event.data.to ? `Vent used: ${event.data.from} → ${event.data.to}` : 'Vent used';
       case 'player-ejected':
         return event.data.skipped
           ? '⏭️ No one was ejected (tie/skip)'
@@ -507,6 +725,10 @@ export class A2AServer {
   // ============================================================================
   // Helpers
   // ============================================================================
+
+  private subscribeEngine(engine: GameEngine): void {
+    engine.onEvent((event) => this.handleGameEvent(event));
+  }
 
   private extractAgentId(message: Message): string | null {
     // Try to get from data part
@@ -544,7 +766,7 @@ export class A2AServer {
    * Verify message signature to prevent impersonation
    * Returns validation result with error message if invalid
    */
-  private async verifyMessageSignature(message: Message): Promise<{ valid: boolean; error?: string }> {
+  private async verifyMessageSignature(message: Message): Promise<{ valid: boolean; error?: string; address?: string }> {
     // Extract signature data from message
     const dataPart = message.parts.find((p) => p.kind === 'data');
     if (!dataPart || !('data' in dataPart)) {
@@ -624,7 +846,7 @@ export class A2AServer {
       };
     }
 
-    return { valid: true };
+    return { valid: true, address: recoveredAddress };
   }
 
   private mapGamePhaseToTaskState(phase: string): 'submitted' | 'working' | 'completed' | 'failed' {

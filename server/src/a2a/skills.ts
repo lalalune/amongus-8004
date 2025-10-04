@@ -76,7 +76,8 @@ export const skillHandlers: Record<string, SkillHandler> = {
   'join-game': async (engine, registry, agentId, message) => {
     const data = extractDataFromParts(message.parts);
     const agentAddress = data.agentAddress as string;
-    const agentDomain = data.agentDomain as string;
+    // Authoritative domain from registry
+    let agentDomain = data.agentDomain as string;
     const playerName = data.playerName as string || `Agent-${agentId}`;
 
     // Validate ERC-8004 registration
@@ -88,6 +89,14 @@ export const skillHandlers: Record<string, SkillHandler> = {
         error: 'NOT_REGISTERED'
       };
     }
+
+    // Fetch authoritative domain; ignore client-supplied domain if mismatch
+    try {
+      const info = await registry.getAgentInfoByAddress(agentAddress);
+      if (info?.agentDomain) {
+        agentDomain = info.agentDomain;
+      }
+    } catch {}
 
     // Add player to game (handle engine errors gracefully)
     try {
@@ -332,6 +341,14 @@ export const skillHandlers: Record<string, SkillHandler> = {
         success: false,
         message: 'Player not found',
         error: 'PLAYER_NOT_FOUND'
+      };
+    }
+
+    if (!player.isAlive) {
+      return {
+        success: false,
+        message: 'Dead players cannot send chat messages',
+        error: 'DEAD_NO_CHAT'
       };
     }
 

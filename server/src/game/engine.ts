@@ -14,7 +14,7 @@ import type {
   PlayerRole
 } from '@elizagames/shared';
 import { DEFAULT_GAME_CONFIG } from '@elizagames/shared';
-import { createShipLayout, areRoomsAdjacent, getPlayersInRoom } from './ship.js';
+import { createShipLayout, areRoomsAdjacent } from './ship.js';
 import { createAllTasks, assignTasksToPlayer, getAllTaskProgress, validateTaskCompletion, canCompleteTask } from './tasks.js';
 
 export class GameEngine {
@@ -22,6 +22,17 @@ export class GameEngine {
   private config: GameConfig;
   private eventCallbacks: Array<(event: GameEvent) => void> = [];
   private timers: NodeJS.Timeout[] = [];
+  // In-memory history for the current game
+  private eventLog: GameEvent[] = [];
+  private messageLog: Array<{
+    timestamp: number;
+    agentId: string;
+    skillId: string;
+    messageId: string;
+    request: unknown;
+    result: unknown;
+    success: boolean;
+  }> = [];
 
   constructor(config: Partial<GameConfig> = {}) {
     this.config = { ...DEFAULT_GAME_CONFIG, ...config };
@@ -291,7 +302,8 @@ export class GameEngine {
         from: previousLocation,
         to: targetRoom
       },
-      visibility: 'all'
+      visibility: 'specific',
+      specificPlayers: [agentId]
     });
 
     return { success: true, message: `Moved to ${targetRoomObj.name}` };
@@ -351,6 +363,16 @@ export class GameEngine {
       player.taskSteps.delete(taskId);
       player.lastActionTime = Date.now();
 
+      // Public, no-details event to avoid leaking task/location info
+      this.emitEvent({
+        type: 'task-completed',
+        gameId: this.state.id,
+        timestamp: Date.now(),
+        data: {},
+        visibility: 'all'
+      });
+
+      // Private detailed event for the player
       this.emitEvent({
         type: 'task-completed',
         gameId: this.state.id,
@@ -360,7 +382,8 @@ export class GameEngine {
           taskId,
           taskDescription: task.description
         },
-        visibility: 'all'
+        visibility: 'specific',
+        specificPlayers: [agentId]
       });
 
       // Check if all tasks are done
@@ -514,6 +537,7 @@ export class GameEngine {
     killer.lastActionTime = now;
     this.state.deadPlayers.add(targetId);
 
+    // Private detail for killer
     this.emitEvent({
       type: 'player-killed',
       gameId: this.state.id,
@@ -522,8 +546,24 @@ export class GameEngine {
         victimId: targetId,
         location: killer.location
       },
-      visibility: 'all'
+      visibility: 'specific',
+      specificPlayers: [killerId]
     });
+
+    // Generic notification to other imposters (exclude killer) without location info
+    const otherImposters = Array.from(this.state.imposterIds).filter((id) => id !== killerId);
+    if (otherImposters.length > 0) {
+      this.emitEvent({
+        type: 'player-killed',
+        gameId: this.state.id,
+        timestamp: Date.now(),
+        data: {
+          victimId: targetId
+        },
+        visibility: 'specific',
+        specificPlayers: otherImposters
+      });
+    }
 
     // Check win conditions
     this.checkWinConditions();
@@ -815,6 +855,7 @@ export class GameEngine {
   }
 
   private emitEvent(event: GameEvent): void {
+    this.eventLog.push(event);
     for (const callback of this.eventCallbacks) {
       callback(event);
     }
@@ -872,6 +913,8 @@ export class GameEngine {
   reset(): void {
     this.clearTimers();
     this.state = this.createInitialState();
+    this.eventLog = [];
+    this.messageLog = [];
   }
 
   private clearTimers(): void {
@@ -986,6 +1029,50 @@ export class GameEngine {
     }
 
     return result;
+  }
+
+  // ============================================================================
+  // History & Logging
+  // ============================================================================
+
+  recordApiMessage(agentId: string, skillId: string, messageId: string, request: unknown, result: unknown, success: boolean): void {
+    this.messageLog.push({
+      timestamp: Date.now(),
+      agentId,
+      skillId,
+      messageId,
+      request,
+      result,
+      success
+    });
+  }
+
+  getHistory(): {
+    id: string;
+    startedAt: number;
+    endedAt?: number;
+    winner?: WinnerType;
+    config: Partial<GameConfig>;
+    events: GameEvent[];
+    messages: Array<{
+      timestamp: number;
+      agentId: string;
+      skillId: string;
+      messageId: string;
+      request: unknown;
+      result: unknown;
+      success: boolean;
+    }>;
+  } {
+    return {
+      id: this.state.id,
+      startedAt: this.state.createdAt,
+      endedAt: this.state.endedAt,
+      winner: this.state.winner,
+      config: this.config,
+      events: this.eventLog,
+      messages: this.messageLog
+    };
   }
 
   getTasksInRoom(roomId: string): Array<{ taskId: string; description: string; type: string }> {

@@ -7,6 +7,7 @@
 import express, { type Request, type Response } from 'express';
 import cors from 'cors';
 import { GameEngine } from './game/engine.js';
+import { GameSessionsManager } from './game/sessions.js';
 import type { GameConfig } from '@elizagames/shared';
 import { createRegistry } from './blockchain/registry.js';
 import { A2AServer } from './a2a/server.js';
@@ -37,6 +38,10 @@ async function main() {
   const gameEngine = new GameEngine(gameConfig);
   console.log('✅ Game engine initialized');
 
+  // Session manager: adopt initial engine for backward-compat; new sessions created on demand
+  const sessions = new GameSessionsManager({ configTemplate: gameConfig });
+  sessions.adoptSession(gameEngine);
+
   // Initialize ERC-8004 registry
   const registry = await createRegistry(RPC_URL);
   console.log(`✅ Connected to ERC-8004 contracts`);
@@ -44,7 +49,7 @@ async function main() {
   console.log(`   Wallet: ${registry.getWalletAddress()}`);
 
   // Initialize A2A server
-  const a2aServer = new A2AServer(gameEngine, registry);
+  const a2aServer = new A2AServer(gameEngine, registry, sessions);
   console.log('✅ A2A server initialized');
   console.log('✅ Per-message signature verification enabled\n');
 
@@ -93,8 +98,40 @@ async function main() {
     await a2aServer.handleRequest(req, res);
   });
 
+  // Game history - only available after a game ends
+  app.get('/games/:id/history', (req: Request, res: Response) => {
+    const gameId = req.params.id;
+    const engine = sessions.getEngineById(gameId);
+    if (!engine) {
+      res.status(404).json({ error: 'Game not found' });
+      return;
+    }
+    const state = engine.getState();
+    if (state.phase !== 'ended') {
+      res.status(403).json({ error: 'History unavailable until game ends' });
+      return;
+    }
+    const history = engine.getHistory();
+    res.json(history);
+  });
+
+  // List ongoing games (basic summaries)
+  app.get('/games', (req: Request, res: Response) => {
+    const list = sessions.getAllSessionsSummary();
+    const redacted = list.map((g) => {
+      if (g.phase === 'ended') return g;
+      const { id, phase, round } = g;
+      return { id, phase, round };
+    });
+    res.json({ games: redacted });
+  });
+
   // Health check
   app.get('/health', (req: Request, res: Response) => {
+    if (process.env.NODE_ENV && process.env.NODE_ENV !== 'local' && process.env.NODE_ENV !== 'development') {
+      res.json({ status: 'ok', uptime: process.uptime() });
+      return;
+    }
     const state = gameEngine.getState();
     res.json({
       status: 'ok',
@@ -111,8 +148,12 @@ async function main() {
     });
   });
 
-  // Debug endpoints (remove in production)
+  // Debug endpoints (development only)
   app.get('/debug/state', (req: Request, res: Response) => {
+    if (process.env.NODE_ENV && process.env.NODE_ENV !== 'local' && process.env.NODE_ENV !== 'development') {
+      res.status(403).json({ error: 'Debug endpoints disabled' });
+      return;
+    }
     const state = gameEngine.getState();
     res.json({
       id: state.id,
@@ -131,11 +172,19 @@ async function main() {
   });
 
   app.get('/debug/players', (req: Request, res: Response) => {
+    if (process.env.NODE_ENV && process.env.NODE_ENV !== 'local' && process.env.NODE_ENV !== 'development') {
+      res.status(403).json({ error: 'Debug endpoints disabled' });
+      return;
+    }
     const players = Array.from(gameEngine.getState().players.values());
     res.json(players);
   });
 
   app.get('/debug/ship', (req: Request, res: Response) => {
+    if (process.env.NODE_ENV && process.env.NODE_ENV !== 'local' && process.env.NODE_ENV !== 'development') {
+      res.status(403).json({ error: 'Debug endpoints disabled' });
+      return;
+    }
     const ship = gameEngine.getState().ship;
     res.json({
       rooms: Array.from(ship.rooms.values()),

@@ -65,7 +65,7 @@ export class GameService extends Service {
     // Auto-join game
     await this.autoJoinGame();
     
-    logger.info('[Game] ✅ Game service initialized and joined game');
+    logger.info('[Game] ✅ Game service initialized');
   }
 
   // ============================================================================

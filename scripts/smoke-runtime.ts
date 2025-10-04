@@ -38,8 +38,9 @@ async function sendSigned(agent: TestAgent, skillId: string, data: Record<string
   const timestamp = Date.now();
   const messageId = crypto.randomUUID();
 
-  // Sign ONLY skill data
-  const payload = JSON.stringify({ messageId, timestamp, skillId, data });
+  // Sign ONLY skill-specific data (exclude auth/metadata fields)
+  const { agentId: _aid, agentAddress: _addr, agentDomain: _dom, playerName: _name, signature: _sig, timestamp: _ts, skillId: _sk, ...skillOnlyData } = data as Record<string, unknown>;
+  const payload = JSON.stringify({ messageId, timestamp, skillId, data: skillOnlyData });
   const signature = await agent.wallet.signMessage(payload);
 
   const message = {
@@ -83,12 +84,29 @@ async function main() {
   // Reset state (dev only)
   await fetch(`${SERVER_URL}/debug/reset`, { method: 'POST' }).catch(() => {});
 
+  // Ensure server is in a clean lobby state before joining
+  await withTimeout(async () => {
+    while (true) {
+      const st = await fetch(`${SERVER_URL}/debug/state`).then((r) => r.json());
+      if (st.phase === 'lobby' && (st.players?.length || 0) === 0) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }, TIMEOUT_MS, 'Server did not reset to empty lobby');
+
   // Phase 1: Join all players (fail-fast)
   console.log('🎮 Joining 5 players...');
   for (const agent of agents) {
     const res = await sendSigned(agent, 'join-game');
     if (res.error) throw new Error(`Join failed for ${agent.name}: ${res.error.message}`);
-    await new Promise((r) => setTimeout(r, 100));
+    // Confirm join by polling get-status for this agent
+    await withTimeout(async () => {
+      while (true) {
+        const status = await sendSigned(agent, 'get-status');
+        if (!status.error) break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    }, TIMEOUT_MS, `post-join get-status failed for ${agent.name}`);
+    await new Promise((r) => setTimeout(r, 25));
   }
 
   // Wait for auto-start or start condition
@@ -100,10 +118,15 @@ async function main() {
     }
   }, TIMEOUT_MS, 'Game did not reach lobby/playing with 5 players');
 
-  // Ensure status works for each
+  // Ensure status works for each (retry if needed while game transitions)
   for (const agent of agents) {
-    const status = await sendSigned(agent, 'get-status');
-    if (status.error) throw new Error(`get-status failed for ${agent.name}`);
+    await withTimeout(async () => {
+      while (true) {
+        const status = await sendSigned(agent, 'get-status');
+        if (!status.error) break;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    }, TIMEOUT_MS, `get-status failed for ${agent.name}`);
   }
   console.log('✅ All players status OK');
 

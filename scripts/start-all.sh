@@ -28,13 +28,6 @@ echo "   Environment: $ENV_MODE"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# Ensure workspace dependencies are installed and linked
-echo "📦 Installing workspace dependencies..."
-cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"/..
-bun install
-echo "✅ Dependencies installed"
-echo ""
-
 # Environment defaults and safety
 # Auto-shutdown (default 2 minutes to avoid runaway loops)
 export AUTO_SHUTDOWN_MS="${AUTO_SHUTDOWN_MS:-120000}"
@@ -61,11 +54,26 @@ for arg in "$@"; do
   fi
 done
 
+ANVIL_WAS_STARTED=0
+
 # Only start Anvil and deploy contracts for local/dev environment
 if [ "$ENV_MODE" = "local" ]; then
     # Check if Anvil is already running
     if lsof -Pi :8545 -sTCP:LISTEN -t >/dev/null ; then
-        echo "✅ Anvil already running on port 8545"
+        if [ $FRESH_FLAG -eq 1 ]; then
+            echo "♻️  Fresh flag set: restarting Anvil..."
+            pkill -f anvil || true
+            sleep 1
+            echo "🔨 Starting Anvil blockchain..."
+            SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+            bash "$SCRIPT_DIR/start-anvil.sh" &
+            ANVIL_PID=$!
+            sleep 3
+            echo "✅ Anvil started (PID: $ANVIL_PID)"
+            ANVIL_WAS_STARTED=1
+        else
+            echo "✅ Anvil already running on port 8545"
+        fi
     else
         echo "🔨 Starting Anvil blockchain..."
         SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -73,6 +81,7 @@ if [ "$ENV_MODE" = "local" ]; then
         ANVIL_PID=$!
         sleep 3
         echo "✅ Anvil started (PID: $ANVIL_PID)"
+        ANVIL_WAS_STARTED=1
     fi
 
     echo ""
@@ -103,6 +112,16 @@ if [ "$ENV_MODE" = "local" ]; then
 else
     echo "ℹ️  $ENV_MODE mode - using existing blockchain and contracts"
     echo "   Make sure contracts are deployed, agents registered, and .env configured"
+    if [ "$ENV_MODE" = "testnet" ]; then
+        echo "🔗 Configuring Base Sepolia RPC and addresses"
+        export RPC_URL="${RPC_URL:-https://sepolia.base.org}"
+        if [ -f contracts/addresses.testnet.json ]; then
+          cp contracts/addresses.testnet.json contracts/addresses.json
+          echo "✅ Using contracts/addresses.testnet.json"
+        else
+          echo "⚠️  contracts/addresses.testnet.json not found; ensure contracts/addresses.json points to testnet addresses"
+        fi
+    fi
 fi
 
 echo ""
@@ -150,42 +169,39 @@ if ! curl -sSf http://localhost:3000/.well-known/agent-card.json >/dev/null; the
   exit 1
 fi
 
-echo ""
-echo "🧪 Running scripted E2E against live server (fail-fast)..."
-DISCUSSION_TIME_MS=$DISCUSSION_TIME_MS VOTING_TIME_MS=$VOTING_TIME_MS KILL_COOLDOWN_MS=$KILL_COOLDOWN_MS \
-  bun run scripts/smoke-runtime.ts || {
-    echo "❌ E2E script failed. Stopping services.";
-    kill $SERVER_PID $ANVIL_PID 2>/dev/null || true;
-    exit 1;
-  }
-
-echo ""
-echo "🤖 Starting agents..."
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd agents
-mkdir -p logs
-
-# Ensure .env exists and GAME_SERVER_URL is 3000
-if ! grep -q "GAME_SERVER_URL=http://localhost:3000" .env; then
-  sed -i '' "s|^GAME_SERVER_URL=.*$|GAME_SERVER_URL=http://localhost:3000|" .env 2>/dev/null || true
+if [ "$ENV_MODE" = "local" ]; then
+  if [ -z "$SKIP_AGENTS" ]; then
+    echo ""
+    echo "🤖 Starting agents..."
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    cd agents
+    mkdir -p logs
+    
+    # Ensure .env exists and GAME_SERVER_URL is 3000
+    if ! grep -q "GAME_SERVER_URL=http://localhost:3000" .env; then
+      sed -i '' "s|^GAME_SERVER_URL=.*$|GAME_SERVER_URL=http://localhost:3000|" .env 2>/dev/null || true
+    fi
+    
+    # Rebuild agents to ensure dist is up-to-date
+    bun run build >/dev/null 2>&1 || true
+    
+    # Start agents
+    GAME_SERVER_URL="http://localhost:3000" \
+    RPC_URL="http://localhost:8545" \
+    OPENAI_API_KEY="$OPENAI_API_KEY" \
+    AUTO_SHUTDOWN_MS="$AUTO_SHUTDOWN_MS" \
+    PLAYER1_PRIVATE_KEY="$PLAYER1_PRIVATE_KEY" \
+    PLAYER2_PRIVATE_KEY="$PLAYER2_PRIVATE_KEY" \
+    PLAYER3_PRIVATE_KEY="$PLAYER3_PRIVATE_KEY" \
+    PLAYER4_PRIVATE_KEY="$PLAYER4_PRIVATE_KEY" \
+    PLAYER5_PRIVATE_KEY="$PLAYER5_PRIVATE_KEY" \
+    bun dist/index.js > logs/agents-orch.log 2>&1 &
+    AGENTS_PID=$!
+    cd ..
+  else
+    echo "ℹ️  SKIP_AGENTS is set; not launching agents."
+  fi
 fi
-
-# Rebuild agents to ensure dist is up-to-date
-bun run build >/dev/null 2>&1 || true
-
-# Start agents
-GAME_SERVER_URL="http://localhost:3000" \
-RPC_URL="http://localhost:8545" \
-OPENAI_API_KEY="$OPENAI_API_KEY" \
-AUTO_SHUTDOWN_MS="$AUTO_SHUTDOWN_MS" \
-PLAYER1_PRIVATE_KEY="$PLAYER1_PRIVATE_KEY" \
-PLAYER2_PRIVATE_KEY="$PLAYER2_PRIVATE_KEY" \
-PLAYER3_PRIVATE_KEY="$PLAYER3_PRIVATE_KEY" \
-PLAYER4_PRIVATE_KEY="$PLAYER4_PRIVATE_KEY" \
-PLAYER5_PRIVATE_KEY="$PLAYER5_PRIVATE_KEY" \
-bun dist/index.js > logs/agents-orch.log 2>&1 &
-AGENTS_PID=$!
-cd ..
 
 # Wait a bit, then verify streaming connections and log status
 sleep 3
@@ -208,7 +224,7 @@ echo ""
 echo "Press Ctrl+C to stop all services"
 
 # Handle shutdown
-trap "echo '\n🛑 Shutting down...'; kill $SERVER_PID $AGENTS_PID 2>/dev/null; [ ! -z \"$ANVIL_PID\" ] && kill $ANVIL_PID 2>/dev/null; exit" INT TERM
+trap "echo '\n🛑 Shutting down...'; kill $SERVER_PID $AGENTS_PID 2>/dev/null; if [ $FRESH_FLAG -eq 1 ] && [ $ANVIL_WAS_STARTED -eq 1 ]; then kill $ANVIL_PID 2>/dev/null; fi; exit" INT TERM
 
 wait
 

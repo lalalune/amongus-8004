@@ -13,6 +13,7 @@ import { logger } from '@elizaos/core';
 import { A2AClientService } from './services/a2aClient.js';
 import { Web3Service } from './services/web3Service.js';
 import { GameService } from './services/gameService.js';
+import { AutoPlayService } from './services/autoPlayService.js';
 import { allGameActions } from './actions/gameActions.js';
 import { gameStateProvider } from './providers/gameStateProvider.js';
 import { gameStrategyEvaluator } from './evaluators/gameStrategyEvaluator.js';
@@ -83,7 +84,8 @@ const amongUsPlugin: Plugin = {
   services: [
     Web3Service,        // 1. Setup wallet & register on-chain
     A2AClientService,   // 2. Connect to game server & fetch Agent Card
-    GameService         // 3. Auto-join game & manage game state
+    GameService,        // 3. Auto-join game & manage game state
+    AutoPlayService     // 4. Optional scripted autoplay (enabled via AGENT_AUTOPLAY)
   ],
 
   // All game actions (11 working + 1 placeholder in Agent Card)

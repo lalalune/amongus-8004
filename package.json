@@ -17,7 +17,7 @@
     "test": "bash scripts/test-all.sh",
     "dev": "NODE_ENV=local bash scripts/start-all.sh",
     "dev:packages": "turbo run dev --parallel",
-    "start": "NODE_ENV=production bash scripts/start-all.sh",
+    "start": "NODE_ENV=testnet bash scripts/start-all.sh",
     "deploy": "sh -c 'if [ \"${NODE_ENV:-local}\" = local ]; then bun run scripts/deploy-contracts.ts; elif [ \"$NODE_ENV\" = testnet ]; then bash scripts/deploy-contracts-testnet.sh && bash scripts/deploy-server-railway.sh testnet; else bash scripts/deploy-contracts-prod.sh && bash scripts/deploy-server-railway.sh production; fi'",
     "deploy:contracts": "bun run scripts/deploy-contracts.ts",
     "verify": "sh -c 'if [ \"${NODE_ENV:-testnet}\" = production ]; then bash scripts/verify-deployment.sh production; elif [ \"$NODE_ENV\" = testnet ]; then bash scripts/verify-deployment.sh testnet; else echo \"No verification for local\"; fi'",
