@@ -1,0 +1,9 @@
+{
+  "identityRegistry": "0x59b670e9fA9D0A427751Af201D676719a970857b",
+  "reputationRegistry": "0x4ed7c70F96B99c776995fB64377f0d4aB3B0e1C1",
+  "validationRegistry": "0x322813Fd9A801c5507c9de605d63CEA4f2CE6c44",
+  "chainId": 31337,
+  "deployer": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+  "blockNumber": 4140,
+  "timestamp": 1759555397236
+}

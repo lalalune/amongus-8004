@@ -1,0 +1,120 @@
+name: Test & Deploy
+
+on:
+  push:
+    branches:
+      - main        # Deploy to testnet
+      - production  # Deploy to production
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Run All Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+      
+      - name: Setup Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+      
+      - name: Install dependencies
+        run: bun run install:all
+      
+      - name: Type check
+        run: bun run lint
+      
+      - name: Build all projects
+        run: bun run build
+      
+      - name: Run contract tests
+        run: bun run test:contracts
+      
+      - name: Start Anvil
+        run: |
+          anvil &
+          sleep 3
+      
+      - name: Deploy contracts locally
+        run: bun run deploy:contracts:local
+      
+      - name: Run server tests
+        run: bun run test:server
+      
+      - name: Start server in background
+        run: |
+          cd server
+          bun run dev &
+          sleep 5
+      
+      - name: Verify server health
+        run: curl http://localhost:3000/health
+
+  deploy-testnet:
+    name: Deploy to Testnet (Railway)
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: test
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+      
+      - name: Deploy to Railway
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN_TESTNET }}
+        run: |
+          cd server
+          railway link ${{ secrets.RAILWAY_PROJECT_ID_TESTNET }}
+          railway up
+      
+      - name: Wait for deployment
+        run: sleep 30
+      
+      - name: Verify deployment
+        run: |
+          URL=${{ secrets.RAILWAY_URL_TESTNET }}
+          curl -f $URL/health || exit 1
+          curl -f $URL/.well-known/agent-card.json || exit 1
+  
+  deploy-production:
+    name: Deploy to Production (Railway)
+    if: github.ref == 'refs/heads/production' && github.event_name == 'push'
+    needs: test
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+      
+      - name: Deploy to Railway
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN_PRODUCTION }}
+        run: |
+          cd server
+          railway link ${{ secrets.RAILWAY_PROJECT_ID_PRODUCTION }}
+          railway up
+      
+      - name: Wait for deployment
+        run: sleep 30
+      
+      - name: Verify deployment
+        run: |
+          URL=${{ secrets.RAILWAY_URL_PRODUCTION }}
+          curl -f $URL/health || exit 1
+          curl -f $URL/.well-known/agent-card.json || exit 1
+

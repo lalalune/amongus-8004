@@ -1,0 +1,58 @@
+{
+  "name": "amongus-8004",
+  "description": "Among Us game using ERC-8004 and A2A protocol",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "workspaces": [
+    "server",
+    "shared",
+    "agents"
+  ],
+  "scripts": {
+    "postinstall": "sh -c 'test -f .gitmodules && git submodule update --init --recursive || true'",
+    "install:all": "bun install && cd server && bun install && cd ../agents && bun install && cd ../shared && bun install",
+    "deploy:contracts": "bun run scripts/deploy-contracts.ts",
+    "build": "bun run build:shared && bun run build:server && bun run build:agents",
+    "build:shared": "cd shared && bun run build",
+    "build:server": "cd server && bun run build",
+    "build:agents": "cd agents && bun run build",
+    "lint": "bun run lint:shared && bun run lint:server && bun run lint:agents",
+    "lint:shared": "cd shared && bun run lint",
+    "lint:server": "cd server && bun run lint",
+    "lint:agents": "cd agents && bun run lint",
+    "typecheck": "bun run lint",
+    "start:anvil": "bash scripts/start-anvil.sh",
+    "start:server": "cd server && bun run dev",
+    "start:server:testnet": "cd server && NODE_ENV=testnet bun run dev",
+    "start:server:prod": "cd server && NODE_ENV=production bun run start",
+    "start:agents": "bash scripts/start-agents.sh",
+    "test:contracts": "cd ./contracts && forge test",
+    "test:server": "cd server && bun test",
+    "test:agents": "cd agents && bun test",
+    "test:all": "bash scripts/test-all.sh",
+    "test:e2e": "bun run agents/tests/e2e.test.ts",
+    "test:unit": "cd agents && bun run tests/runner.ts",
+    "test:runtime": "bun run test:e2e && bun run test:unit",
+    "deploy:contracts:testnet": "bash scripts/deploy-contracts-testnet.sh",
+    "deploy:contracts:prod": "bash scripts/deploy-contracts-prod.sh",
+    "deploy:server:testnet": "bash scripts/deploy-server-railway.sh testnet",
+    "deploy:server:prod": "bash scripts/deploy-server-railway.sh production",
+    "verify:testnet": "bash scripts/verify-deployment.sh testnet",
+    "verify:prod": "bash scripts/verify-deployment.sh production",
+    "register:agents": "bun run scripts/register-agents.ts",
+    "dev": "bash scripts/start-all.sh",
+    "start": "NODE_ENV=testnet bash scripts/start-all.sh",
+    "start:prod": "NODE_ENV=production bash scripts/start-all.sh",
+    "clean": "rm -rf node_modules server/node_modules agents/node_modules shared/node_modules"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "concurrently": "^9.1.2",
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "bun": ">=1.0.0"
+  }
+}
