@@ -4,3 +4,5 @@ node_modules/
 *.log
 vendor/
 .pid
+.turbo
+.DS_Store

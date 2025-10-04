@@ -89,8 +89,17 @@ export const skillHandlers: Record<string, SkillHandler> = {
       };
     }
 
-    // Add player to game
-    const player = engine.addPlayer(agentId, agentAddress, agentDomain, playerName);
+    // Add player to game (handle engine errors gracefully)
+    try {
+      engine.addPlayer(agentId, agentAddress, agentDomain, playerName);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        success: false,
+        message: msg,
+        error: msg.toLowerCase().includes('in progress') ? 'GAME_IN_PROGRESS' : 'JOIN_FAILED'
+      };
+    }
 
     const state = engine.getState();
     const canStart = engine.canStartGame();

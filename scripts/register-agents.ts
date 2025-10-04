@@ -53,7 +53,8 @@ async function main() {
   console.log('🔐 Registering All Agents on ERC-8004 IdentityRegistry\n');
   console.log(`RPC URL: ${RPC_URL}\n`);
 
-  for (const agent of AGENTS) {
+  // Run registrations concurrently
+  const registrations = AGENTS.map(async (agent) => {
     console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
     console.log(`${agent.name}`);
     console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
@@ -71,23 +72,22 @@ async function main() {
 
     if (isRegistered) {
       console.log(`Status:   ✅ Already registered`);
-      
-      // Get existing registration details
       const agentInfo = await registry.getAgentInfoByAddress(wallet.address);
       console.log(`Agent ID: ${agentInfo.agentId}`);
       console.log(`Domain:   ${agentInfo.agentDomain}`);
+      console.log('');
+      return { name: agent.name, address: wallet.address, registered: true };
     } else {
       console.log(`Status:   📝 Not registered, registering now...`);
-
-      // Register the agent
       const agentId = await registry.registerAgent(desiredDomain, wallet.address);
-      
       console.log(`Status:   ✅ Registered successfully!`);
       console.log(`Agent ID: ${agentId}`);
+      console.log('');
+      return { name: agent.name, address: wallet.address, registered: true };
     }
+  });
 
-    console.log('');
-  }
+  const results = await Promise.all(registrations);
 
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log('✅ All agents processed!');
@@ -95,16 +95,15 @@ async function main() {
 
   // Verify all are registered
   console.log('🔍 Verification:\n');
-  
   const verifyRegistry = await createRegistry(RPC_URL);
-  
-  for (const agent of AGENTS) {
-    const privateKey = process.env[agent.envVar] || agent.fallback;
-    const wallet = new ethers.Wallet(privateKey);
-    const isRegistered = await verifyRegistry.isAgentRegistered(wallet.address);
-    const status = isRegistered ? '✅' : '❌';
-    console.log(`${status} ${agent.name.padEnd(20)} ${wallet.address}`);
-  }
+
+  await Promise.all(
+    results.map(async (r) => {
+      const isRegistered = await verifyRegistry.isAgentRegistered(r.address);
+      const status = isRegistered ? '✅' : '❌';
+      console.log(`${status} ${r.name.padEnd(20)} ${r.address}`);
+    })
+  );
 
   console.log('\n✨ Registration complete! Agents are ready to play.\n');
 }

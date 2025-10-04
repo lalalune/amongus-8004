@@ -23,6 +23,8 @@ export class GameService extends Service {
 
   private a2aClient: A2AClientService | null = null;
   private web3: Web3Service | null = null;
+  private joinRetryTimer: NodeJS.Timeout | null = null;
+  private readonly joinRetryIntervalMs = 5000;
   private gameState: GameState = {
     connected: false,
     phase: 'disconnected',
@@ -79,7 +81,8 @@ export class GameService extends Service {
     logger.info('[Game] Auto-joining game...');
 
     // Start streaming game events immediately on join so we receive updates
-    await this.a2aClient!.streamMessage(
+    const attemptJoin = async () => {
+      await this.a2aClient!.streamMessage(
       'join-game',
       {
         agentId: agentInfo.agentId.toString(),
@@ -88,7 +91,38 @@ export class GameService extends Service {
         playerName: this.web3!.getAgentInfo()?.agentDomain.split('.')[0] || 'Player'
       },
       'join the game'
-    );
+      );
+    };
+
+    try {
+      await attemptJoin();
+    } catch (err) {
+      const msg = (err as Error).message || '';
+      if (msg.toLowerCase().includes('in progress')) {
+        logger.warn('[Game] Join rejected: game in progress. Retrying periodically...');
+        // Schedule periodic retry until success
+        if (this.joinRetryTimer) clearInterval(this.joinRetryTimer);
+        this.joinRetryTimer = setInterval(async () => {
+          try {
+            await attemptJoin();
+            // success: clear timer and finalize connection state
+            if (this.joinRetryTimer) {
+              clearInterval(this.joinRetryTimer);
+              this.joinRetryTimer = null;
+            }
+            this.gameState.connected = true;
+            this.gameState.phase = 'lobby';
+            this.gameState.lastUpdate = Date.now();
+            logger.info('[Game] ✅ Connected to game and streaming events');
+          } catch (e) {
+            // keep retrying silently
+          }
+        }, this.joinRetryIntervalMs) as unknown as NodeJS.Timeout;
+        return;
+      } else {
+        throw err;
+      }
+    }
 
     this.gameState.connected = true;
     this.gameState.phase = 'lobby';

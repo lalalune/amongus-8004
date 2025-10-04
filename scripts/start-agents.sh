@@ -1,5 +1,5 @@
 #!/bin/bash
-# Start all 5 player agents with manual runtime management
+# Start all 5 player agents
 
 echo "🤖 Starting Among Us Agent Project (5 agents)..."
 echo ""
@@ -28,7 +28,7 @@ if [ -z "$OPENAI_API_KEY" ]; then
     echo "   Set it in your environment or .env file"
 fi
 
-echo "🚀 Starting all 5 agents with manual runtimes..."
+echo "🚀 Starting agents..."
 echo ""
 echo "   • RedAgent    (Player 1)"
 echo "   • BlueAgent   (Player 2)"
@@ -40,7 +40,7 @@ echo "   Game Server: $GAME_SERVER_URL"
 echo "   RPC:         $RPC_URL"
 echo ""
 
-# Start all agents using manual runtime (no CLI)
+# Start all agents
 bun run dev > logs/agents.log 2>&1 &
 AGENTS_PID=$!
 

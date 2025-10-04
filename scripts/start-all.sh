@@ -53,6 +53,14 @@ if [ "$ENV_MODE" = "local" ]; then
   export PLAYER5_PRIVATE_KEY="${PLAYER5_PRIVATE_KEY:-0x47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a}"
 fi
 
+# Parse optional flags (e.g., --fresh)
+FRESH_FLAG=0
+for arg in "$@"; do
+  if [ "$arg" = "--fresh" ] || [ "$arg" = "fresh" ]; then
+    FRESH_FLAG=1
+  fi
+done
+
 # Only start Anvil and deploy contracts for local/dev environment
 if [ "$ENV_MODE" = "local" ]; then
     # Check if Anvil is already running
@@ -73,7 +81,11 @@ if [ "$ENV_MODE" = "local" ]; then
 
     echo ""
     echo "📝 Deploying ERC-8004 contracts to local Anvil..."
-    bun run deploy:contracts
+    if [ $FRESH_FLAG -eq 1 ]; then
+      FRESH=1 bun run deploy:contracts --fresh
+    else
+      bun run deploy:contracts
+    fi
 
     if [ $? -ne 0 ]; then
         echo "❌ Contract deployment failed"
@@ -148,7 +160,7 @@ DISCUSSION_TIME_MS=$DISCUSSION_TIME_MS VOTING_TIME_MS=$VOTING_TIME_MS KILL_COOLD
   }
 
 echo ""
-echo "🤖 Starting 5 player agents (manual runtime)..."
+echo "🤖 Starting agents..."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd agents
 mkdir -p logs
@@ -161,7 +173,7 @@ fi
 # Rebuild agents to ensure dist is up-to-date
 bun run build >/dev/null 2>&1 || true
 
-# Start agents via manual runtime (dist/index.js) with required env vars
+# Start agents
 GAME_SERVER_URL="http://localhost:3000" \
 RPC_URL="http://localhost:8545" \
 OPENAI_API_KEY="$OPENAI_API_KEY" \

@@ -4,7 +4,7 @@
  */
 
 import { ethers } from 'ethers';
-import { readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -30,6 +30,10 @@ async function main() {
   // Connect to local Anvil or specified RPC
   const rpcUrl = process.env.RPC_URL || 'http://localhost:8545';
   console.log(`🔌 Connecting to RPC: ${rpcUrl}`);
+  
+  // Fresh flag (env or CLI)
+  const args = process.argv.slice(2);
+  const isFresh = args.includes('--fresh') || args.includes('fresh') || process.env.FRESH === '1' || process.env.FRESH === 'true';
   
   // Check if it's local Anvil
   if (rpcUrl.includes('localhost') || rpcUrl.includes('127.0.0.1')) {
@@ -63,6 +67,36 @@ async function main() {
   
   const network = await provider.getNetwork();
   console.log(`📡 Network: ${network.name} (chainId: ${network.chainId})\n`);
+
+  // Attempt to reuse an existing deployment if present and valid
+  try {
+    const addressesPath = join(CONTRACTS_DIR, 'addresses.json');
+    if (!isFresh && existsSync(addressesPath)) {
+      const cached = JSON.parse(readFileSync(addressesPath, 'utf-8')) as DeploymentResult;
+      if (Number(cached.chainId) === Number(network.chainId)) {
+        const [idCode, repCode, valCode] = await Promise.all([
+          provider.getCode(cached.identityRegistry),
+          provider.getCode(cached.reputationRegistry),
+          provider.getCode(cached.validationRegistry)
+        ]);
+        const hasAll = idCode !== '0x' && repCode !== '0x' && valCode !== '0x';
+        if (hasAll) {
+          console.log('🧠 Found existing deployment on this chain. Skipping deploy.');
+          console.log('Contract Addresses:');
+          console.log(`  IdentityRegistry:   ${cached.identityRegistry}`);
+          console.log(`  ReputationRegistry: ${cached.reputationRegistry}`);
+          console.log(`  ValidationRegistry: ${cached.validationRegistry}`);
+          process.exit(0);
+        } else {
+          console.log('⚠️  addresses.json exists but on-chain bytecode was not found for one or more contracts. Proceeding with fresh deploy...');
+        }
+      } else {
+        console.log('ℹ️  Cached deployment found but chainId differs. Proceeding with deploy...');
+      }
+    }
+  } catch (e) {
+    console.log('ℹ️  Unable to use cached deployment, continuing with deploy...');
+  }
 
   // Load contract ABIs and bytecode from compiled contracts
   console.log(`📂 Loading contract ABIs from: ${join(CONTRACTS_DIR, 'abis')}`);

@@ -383,6 +383,17 @@ export class A2AClientService extends Service {
       body: JSON.stringify(request)
     });
 
+    // Some servers will return a JSON error instead of an SSE stream. Handle gracefully.
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const json = await response.json() as { result?: unknown; error?: { message: string } };
+      if (json.error) {
+        throw new Error(`A2A Error: ${json.error.message}`);
+      }
+      // If no error and no SSE, treat as failure to stream
+      throw new Error('A2A Error: Unexpected non-stream JSON response');
+    }
+
     if (!response.ok) {
       throw new Error(`Failed to start stream: ${response.statusText}`);
     }
@@ -514,6 +525,42 @@ export class A2AClientService extends Service {
 
   getActiveTask(): A2ATask | null {
     return this.activeTask;
+  }
+
+  // Resubscribe to an existing task's SSE stream
+  async resubscribeTask(taskId: string): Promise<void> {
+    if (!this.agentCard) {
+      throw new Error('Agent Card not loaded');
+    }
+
+    const request = {
+      jsonrpc: '2.0',
+      id: Date.now(),
+      method: 'tasks/resubscribe',
+      params: { id: taskId }
+    };
+
+    const response = await fetch(this.agentCard.url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'text/event-stream'
+      },
+      body: JSON.stringify(request)
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to resubscribe: ${response.statusText}`);
+    }
+
+    if (!response.body) {
+      throw new Error('No response body for resubscribe stream');
+    }
+
+    const reader = response.body.getReader() as ReadableStreamDefaultReader<Uint8Array>;
+    const decoder = new TextDecoder();
+    this.processSSEStream(reader, decoder);
+    logger.info('[A2A] Resubscribed to task stream');
   }
 
   // ============================================================================
