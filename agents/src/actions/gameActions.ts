@@ -14,6 +14,13 @@ import type {
 } from '@elizaos/core';
 import type { GameService } from '../services/gameService.js';
 
+function isActionAvailable(skillId: string, runtime: IAgentRuntime): boolean {
+  const gameService = runtime.getService<GameService>('game');
+  if (!gameService) return false;
+  const available = gameService.getAvailableActions();
+  return available.includes(skillId);
+}
+
 // Helper to execute any skill through game service
 async function executeGameSkill(
   skillId: string,
@@ -83,9 +90,9 @@ export const leaveGameAction: Action = {
   name: 'LEAVE_GAME',
   similes: ['EXIT', 'QUIT'],
   description: 'Leave the current game',
-  validate: async (_runtime, message) => {
+  validate: async (runtime, message) => {
     const text = (message.content.text || '').toLowerCase();
-    return text.includes('leave') || text.includes('exit') || text.includes('quit');
+    return (text.includes('leave') || text.includes('exit') || text.includes('quit')) && isActionAvailable('leave-game', runtime);
   },
   handler: async (runtime, message, _state, _options, callback) => {
     return await executeGameSkill('leave-game', runtime, message, callback);
@@ -100,9 +107,9 @@ export const moveToRoomAction: Action = {
   name: 'MOVE_TO_ROOM',
   similes: ['NAVIGATE', 'GO_TO', 'WALK'],
   description: 'Move to a different room',
-  validate: async (_runtime, message) => {
+  validate: async (runtime, message) => {
     const text = (message.content.text || '').toLowerCase();
-    return text.includes('move') || text.includes('go to') || text.includes('walk');
+    return (text.includes('move') || text.includes('go to') || text.includes('walk')) && isActionAvailable('move-to-room', runtime);
   },
   handler: async (runtime, message, _state, _options, callback) => {
     return await executeGameSkill('move-to-room', runtime, message, callback);
@@ -117,9 +124,9 @@ export const completeTaskAction: Action = {
   name: 'COMPLETE_TASK',
   similes: ['FIX', 'REPAIR', 'DO_TASK'],
   description: 'Complete an assigned task',
-  validate: async (_runtime, message) => {
+  validate: async (runtime, message) => {
     const text = (message.content.text || '').toLowerCase();
-    return text.includes('task') || text.includes('fix') || text.includes('repair');
+    return (text.includes('task') || text.includes('fix') || text.includes('repair')) && isActionAvailable('complete-task', runtime);
   },
   handler: async (runtime, message, _state, _options, callback) => {
     return await executeGameSkill('complete-task', runtime, message, callback);
@@ -134,9 +141,9 @@ export const killPlayerAction: Action = {
   name: 'KILL_PLAYER',
   similes: ['ELIMINATE', 'ATTACK'],
   description: 'Kill a player (imposters only)',
-  validate: async (_runtime, message) => {
+  validate: async (runtime, message) => {
     const text = (message.content.text || '').toLowerCase();
-    return text.includes('kill') || text.includes('eliminate');
+    return (text.includes('kill') || text.includes('eliminate')) && isActionAvailable('kill-player', runtime);
   },
   handler: async (runtime, message, _state, _options, callback) => {
     return await executeGameSkill('kill-player', runtime, message, callback);
@@ -151,9 +158,9 @@ export const useVentAction: Action = {
   name: 'USE_VENT',
   similes: ['VENT'],
   description: 'Use vent to move quickly (imposters only)',
-  validate: async (_runtime, message) => {
+  validate: async (runtime, message) => {
     const text = (message.content.text || '').toLowerCase();
-    return text.includes('vent');
+    return text.includes('vent') && isActionAvailable('use-vent', runtime);
   },
   handler: async (runtime, message, _state, _options, callback) => {
     return await executeGameSkill('use-vent', runtime, message, callback);
@@ -168,9 +175,9 @@ export const sabotageAction: Action = {
   name: 'SABOTAGE',
   similes: ['SABOTAGE_SYSTEM', 'TRIGGER_EMERGENCY'],
   description: 'Sabotage a critical system (imposters only)',
-  validate: async (_runtime, message) => {
+  validate: async (runtime, message) => {
     const text = (message.content.text || '').toLowerCase();
-    return text.includes('sabotage');
+    return text.includes('sabotage') && isActionAvailable('sabotage', runtime);
   },
   handler: async (runtime, message, _state, _options, callback) => {
     return await executeGameSkill('sabotage', runtime, message, callback);
@@ -185,9 +192,9 @@ export const callMeetingAction: Action = {
   name: 'CALL_MEETING',
   similes: ['EMERGENCY', 'MEETING'],
   description: 'Call an emergency meeting',
-  validate: async (_runtime, message) => {
+  validate: async (runtime, message) => {
     const text = (message.content.text || '').toLowerCase();
-    return text.includes('meeting') || text.includes('emergency');
+    return (text.includes('meeting') || text.includes('emergency')) && isActionAvailable('call-meeting', runtime);
   },
   handler: async (runtime, message, _state, _options, callback) => {
     return await executeGameSkill('call-meeting', runtime, message, callback);
@@ -202,9 +209,9 @@ export const reportBodyAction: Action = {
   name: 'REPORT_BODY',
   similes: ['REPORT'],
   description: 'Report a dead body',
-  validate: async (_runtime, message) => {
+  validate: async (runtime, message) => {
     const text = (message.content.text || '').toLowerCase();
-    return text.includes('report') && text.includes('body');
+    return text.includes('report') && text.includes('body') && isActionAvailable('report-body', runtime);
   },
   handler: async (runtime, message, _state, _options, callback) => {
     return await executeGameSkill('report-body', runtime, message, callback);
@@ -219,9 +226,9 @@ export const sendMessageAction: Action = {
   name: 'SEND_CHAT_MESSAGE',
   similes: ['CHAT', 'SAY', 'SPEAK'],
   description: 'Send a chat message during discussion',
-  validate: async (_runtime, message) => {
+  validate: async (runtime, message) => {
     const text = (message.content.text || '').toLowerCase();
-    return text.includes('say') || text.includes('chat') || text.includes('message');
+    return (text.includes('say') || text.includes('chat') || text.includes('message')) && isActionAvailable('send-message', runtime);
   },
   handler: async (runtime, message, _state, _options, callback) => {
     return await executeGameSkill('send-message', runtime, message, callback);
@@ -236,9 +243,9 @@ export const voteAction: Action = {
   name: 'VOTE',
   similes: ['VOTE_PLAYER', 'EJECT'],
   description: 'Vote to eject a player',
-  validate: async (_runtime, message) => {
+  validate: async (runtime, message) => {
     const text = (message.content.text || '').toLowerCase();
-    return text.includes('vote');
+    return text.includes('vote') && isActionAvailable('vote', runtime);
   },
   handler: async (runtime, message, _state, _options, callback) => {
     return await executeGameSkill('vote', runtime, message, callback);

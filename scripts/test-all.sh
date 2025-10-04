@@ -39,19 +39,29 @@ echo ""
 # Phase 2: Game Logic Tests
 # ============================================================================
 
-echo "📋 Phase 2: Game Logic Tests"
+echo "📋 Phase 2: Game Runtime E2E"
 echo "─────────────────────────────────────────────────"
 
-cd server
-if bun test src/game/; then
-    echo "✅ Game logic tests passed"
-    TESTS_PASSED=$((TESTS_PASSED + 1))
-else
-    echo "❌ Game logic tests failed"
-    TESTS_FAILED=$((TESTS_FAILED + 1))
-fi
+# Spin server and run runtime E2E smoke (fast timers)
+ENV_MODE=local DISCUSSION_TIME_MS=4000 VOTING_TIME_MS=3000 KILL_COOLDOWN_MS=1000 bash scripts/start-all.sh &
+STARTALL_PID=$!
 
-cd ..
+# Wait for health then run smoke separately to assert
+for i in {1..60}; do
+  if curl -sSf http://localhost:3000/health >/dev/null; then
+    if bun run scripts/smoke-runtime.ts; then
+      echo "✅ Runtime E2E passed"
+      TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+      echo "❌ Runtime E2E failed"
+      TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    break
+  fi
+  sleep 0.5
+done
+
+kill $STARTALL_PID 2>/dev/null || true
 echo ""
 
 # ============================================================================

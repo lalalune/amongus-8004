@@ -7,6 +7,9 @@ import { AgentRuntime, type Character, type Plugin } from '@elizaos/core';
 import amongUsPlugin from './plugin.js';
 
 // Import all character configurations
+import bootstrapPlugin from '@elizaos/plugin-bootstrap';
+import openaiPlugin from '@elizaos/plugin-openai';
+import sqlPlugin from '@elizaos/plugin-sql';
 import player1 from '../characters/player1.json';
 import player2 from '../characters/player2.json';
 import player3 from '../characters/player3.json';
@@ -25,11 +28,6 @@ const createAgentRuntime = async (
   if (!privateKey) {
     throw new Error(`Missing environment variable: ${privateKeyEnvVar}`);
   }
-
-  // Dynamically import plugins to avoid type conflicts
-  const { bootstrapPlugin } = await import('@elizaos/plugin-bootstrap');
-  const { openaiPlugin } = await import('@elizaos/plugin-openai');
-  const { plugin: sqlPlugin } = await import('@elizaos/plugin-sql');
 
   // Build character with settings
   const characterWithSettings: Character = {
@@ -137,36 +135,27 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 }
 
 // Export for programmatic use
-export { startAgents, activeRuntimes, createAgentRuntime };
+export { activeRuntimes, createAgentRuntime, startAgents };
 
 // Export plugin for use in other projects
-export { amongUsPlugin };
+  export { amongUsPlugin };
 
 // Export services for advanced usage
-export { Web3Service } from './services/web3Service.js';
-export { A2AClientService } from './services/a2aClient.js';
-export { GameService } from './services/gameService.js';
+  export { A2AClientService } from './services/a2aClient.js';
+  export { GameService } from './services/gameService.js';
+  export { Web3Service } from './services/web3Service.js';
 
 // Export performance monitoring
 export { PerformanceMonitor, performanceMonitor } from './performance.js';
 export type { PerformanceMetric, PerformanceStats } from './performance.js';
 
 // Export types
-export type { A2AAgentCard, A2ASkill, A2AMessage, A2ATask } from './services/a2aClient.js';
+export type { A2AAgentCard, A2AMessage, A2ASkill, A2ATask } from './services/a2aClient.js';
 export type { GameState } from './services/gameService.js';
 export type { AgentInfo } from './services/web3Service.js';
 
 // Export error types
 export {
-  AmongUsPluginError,
-  Web3Error,
-  RegistrationError,
   A2AProtocolError,
-  AgentCardError,
-  GameStateError,
-  SkillExecutionError,
-  ServiceNotAvailableError,
-  ConfigurationError,
-  NetworkError,
-  StreamingError
+  AgentCardError, AmongUsPluginError, ConfigurationError, GameStateError, NetworkError, RegistrationError, ServiceNotAvailableError, SkillExecutionError, StreamingError, Web3Error
 } from './errors.js';

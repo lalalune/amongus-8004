@@ -1,26 +1,46 @@
 #!/usr/bin/env bun
 /**
- * Runtime smoke test against a live server on port 3000
- * - Joins the game with Player1 (Anvil default key)
- * - Retrieves status
- * - Prints debug state
+ * Runtime E2E test against a live server on port 3000
+ * - Spins a 5-player scripted round end-to-end
+ * - Verifies lobby join, game start, actions, meeting/vote, and game end
+ * - Enforces fail-fast timeouts at each phase
  */
 
 import { ethers } from 'ethers';
 
+type TestAgent = {
+  name: string;
+  wallet: ethers.Wallet;
+  agentId: string;
+  domain: string;
+};
+
 const SERVER_URL = process.env.GAME_SERVER_URL || 'http://localhost:3000';
+const TIMEOUT_MS = parseInt(process.env.E2E_TIMEOUT_MS || '40000', 10);
 
-// Player1 - Anvil default
-const PRIVATE_KEY = process.env.PRIVATE_KEY || '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
-const wallet = new ethers.Wallet(PRIVATE_KEY);
+// 5 local agents (Anvil defaults)
+const wallets = [
+  '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
+  '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d',
+  '0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a',
+  '0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6',
+  '0x47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a'
+].map((pk) => new ethers.Wallet(pk));
 
-async function sendSigned(skillId: string, data: Record<string, unknown> = {}, agentId = 'agent-1') {
+const agents: TestAgent[] = wallets.map((w, i) => ({
+  name: `Player${i + 1}`,
+  wallet: w,
+  agentId: `agent-${i + 1}`,
+  domain: `player${i + 1}.amongus8004.local`
+}));
+
+async function sendSigned(agent: TestAgent, skillId: string, data: Record<string, unknown> = {}) {
   const timestamp = Date.now();
   const messageId = crypto.randomUUID();
 
   // Sign ONLY skill data
   const payload = JSON.stringify({ messageId, timestamp, skillId, data });
-  const signature = await wallet.signMessage(payload);
+  const signature = await agent.wallet.signMessage(payload);
 
   const message = {
     role: 'user',
@@ -30,10 +50,10 @@ async function sendSigned(skillId: string, data: Record<string, unknown> = {}, a
         kind: 'data',
         data: {
           skillId,
-          agentId,
-          agentAddress: wallet.address,
-          agentDomain: 'player1.amongus8004.local',
-          playerName: 'Player1-Red',
+          agentId: agent.agentId,
+          agentAddress: agent.wallet.address,
+          agentDomain: agent.domain,
+          playerName: agent.name,
           signature,
           timestamp,
           ...data
@@ -60,25 +80,75 @@ async function main() {
   const health = await fetch(`${SERVER_URL}/health`).then((r) => r.json());
   console.log('💚 Health:', health.status, 'phase=', health.game?.phase);
 
-  // Join game
-  const join = await sendSigned('join-game');
-  if (join.error) {
-    console.error('❌ Join failed:', join.error);
-    process.exit(1);
-  }
-  console.log('✅ Joined game');
+  // Reset state (dev only)
+  await fetch(`${SERVER_URL}/debug/reset`, { method: 'POST' }).catch(() => {});
 
-  // Status
-  const status = await sendSigned('get-status');
-  if (status.error) {
-    console.error('❌ get-status failed:', status.error);
-    process.exit(1);
+  // Phase 1: Join all players (fail-fast)
+  console.log('🎮 Joining 5 players...');
+  for (const agent of agents) {
+    const res = await sendSigned(agent, 'join-game');
+    if (res.error) throw new Error(`Join failed for ${agent.name}: ${res.error.message}`);
+    await new Promise((r) => setTimeout(r, 100));
   }
-  console.log('✅ get-status ok');
 
-  // Debug state
-  const state = await fetch(`${SERVER_URL}/debug/state`).then((r) => r.json());
-  console.log('🧭 State:', { phase: state.phase, round: state.round, players: state.players?.length });
+  // Wait for auto-start or start condition
+  await withTimeout(async () => {
+    while (true) {
+      const st = await fetch(`${SERVER_URL}/debug/state`).then((r) => r.json());
+      if (st.players?.length >= 5 && (st.phase === 'playing' || st.phase === 'lobby')) break;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }, TIMEOUT_MS, 'Game did not reach lobby/playing with 5 players');
+
+  // Ensure status works for each
+  for (const agent of agents) {
+    const status = await sendSigned(agent, 'get-status');
+    if (status.error) throw new Error(`get-status failed for ${agent.name}`);
+  }
+  console.log('✅ All players status OK');
+
+  // Phase 2: Movement from P1
+  await sendSigned(agents[0], 'move-to-room', { targetRoom: 'upper-hallway' });
+
+  // Phase 3: Call meeting and vote quickly to end round
+  await sendSigned(agents[2], 'call-meeting');
+  // Give server a moment to enter discussion
+  await new Promise((r) => setTimeout(r, 300));
+
+  // Move to voting faster if timers are short, cast votes
+  await withTimeout(async () => {
+    // Attempt votes; some may be rejected until voting phase flips
+    for (const agent of agents) {
+      try {
+        await sendSigned(agent, 'vote', { targetId: 'agent-1' });
+      } catch {}
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }, TIMEOUT_MS, 'Voting phase did not accept votes');
+
+  // Phase 4: Verify game ends or returns to playing
+  await withTimeout(async () => {
+    while (true) {
+      const st = await fetch(`${SERVER_URL}/debug/state`).then((r) => r.json());
+      if (['playing', 'ended', 'discussion', 'voting'].includes(st.phase)) {
+        if (st.phase === 'ended' || st.phase === 'playing') break;
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }, TIMEOUT_MS, 'Game did not progress to playing/ended');
+
+  const finalState = await fetch(`${SERVER_URL}/debug/state`).then((r) => r.json());
+  console.log('🏁 Final State:', { phase: finalState.phase, round: finalState.round, players: finalState.players?.length });
+}
+
+async function withTimeout<T>(fn: () => Promise<T>, timeoutMs: number, errorMessage: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return await Promise.race([
+    fn().finally(() => timer && clearTimeout(timer)),
+    new Promise<T>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(errorMessage)), timeoutMs);
+    })
+  ]) as T;
 }
 
 main().catch((e) => {

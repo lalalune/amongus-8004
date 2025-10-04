@@ -4,6 +4,7 @@
  */
 
 import { Service, type IAgentRuntime, logger } from '@elizaos/core';
+import type { Action, ActionResult, Memory, State, HandlerCallback, Content } from '@elizaos/core';
 import { v4 as uuidv4 } from 'uuid';
 import { ethers } from 'ethers';
 
@@ -78,8 +79,111 @@ export class A2AClientService extends Service {
     // Fetch Agent Card
     await this.fetchAgentCard();
     
+    // Dynamically register actions for available skills
+    this.registerDynamicActions(runtime);
+    
     logger.info(`[A2A] Connected to: ${this.agentCard?.name}`);
     logger.info(`[A2A] Available skills: ${this.agentCard?.skills.length}`);
+  }
+
+  private normalizeA2AResponse(result: unknown): { success: boolean; message: string; data?: Record<string, unknown>; error?: string } {
+    let response: { success: boolean; message: string; data?: Record<string, unknown>; error?: string } = {
+      success: true,
+      message: 'OK'
+    };
+    const r = result as any;
+    if (r && typeof r === 'object') {
+      if (r.kind === 'task') {
+        const parts = r.status?.message?.parts as Array<{ kind?: string; text?: string }> | undefined;
+        const textParts = Array.isArray(parts) ? parts.filter((p) => p.kind === 'text').map((p) => p.text).join(' ') : '';
+        response = {
+          success: true,
+          message: textParts || `Task ${r.status?.state || 'working'}`,
+          data: r
+        };
+      } else if (r.role === 'agent' && Array.isArray(r.parts)) {
+        const textParts = r.parts.filter((p: any) => p.kind === 'text').map((p: any) => p.text).join(' ');
+        response = {
+          success: true,
+          message: textParts || 'OK',
+          data: r
+        };
+      } else if (typeof r.success === 'boolean' && typeof r.message === 'string') {
+        response = r;
+      }
+    }
+    return response;
+  }
+
+  private registerDynamicActions(runtime: IAgentRuntime): void {
+    const skills = this.getSkills();
+    if (!skills || skills.length === 0) return;
+
+    const existingNames = new Set((runtime.actions as unknown as Action[]).map((a: Action) => a.name));
+
+    for (const skill of skills) {
+      const actionName = `A2A_${skill.id.replace(/[^A-Za-z0-9]/g, '_').toUpperCase()}`;
+      if (existingNames.has(actionName)) continue;
+
+      const action: Action = {
+        name: actionName,
+        similes: [skill.name.toUpperCase().replace(/\s+/g, '_'), skill.id.toUpperCase()],
+        description: skill.description,
+        validate: async (rt: IAgentRuntime, _message: Memory, _state?: State) => {
+          try {
+            const gameService = rt.getService('game') as any;
+            if (!gameService) return false;
+            const available = gameService.getAvailableActions();
+            return available.includes(skill.id);
+          } catch {
+            return false;
+          }
+        },
+        handler: async (
+          rt: IAgentRuntime,
+          message: Memory,
+          _state?: State,
+          _options?: any,
+          callback?: HandlerCallback
+        ): Promise<ActionResult> => {
+          const gameService = rt.getService('game') as any;
+          if (!gameService) {
+            return {
+              success: false,
+              text: 'Game service not available',
+              error: new Error('GAME_SERVICE_NOT_FOUND')
+            };
+          }
+
+          const params: Record<string, unknown> = {};
+          const textContent = message.content.text || '';
+          const result = await gameService.executeSkill(skill.id, params, textContent);
+          const normalized = this.normalizeA2AResponse(result);
+          const responseContent: Content = {
+            text: normalized.message,
+            action: skill.id,
+            source: message.content.source
+          };
+          if (callback) {
+            await callback(responseContent);
+          }
+          return {
+            success: normalized.success,
+            text: normalized.message,
+            data: normalized.data,
+            ...(!normalized.success && { error: new Error(normalized.error || 'Skill failed') })
+          } as ActionResult;
+        },
+        examples: []
+      };
+
+      try {
+        (runtime.actions as unknown as Action[]).push(action);
+        logger.info(`[A2A] Registered dynamic action: ${actionName}`);
+      } catch (err) {
+        logger.warn(`[A2A] Failed to register action ${actionName}: ${String(err)}`);
+      }
+    }
   }
 
   // ============================================================================

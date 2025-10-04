@@ -78,8 +78,8 @@ export class GameService extends Service {
 
     logger.info('[Game] Auto-joining game...');
 
-    // Join game using non-streaming request to ensure player is added
-    await this.a2aClient!.sendMessage(
+    // Start streaming game events immediately on join so we receive updates
+    await this.a2aClient!.streamMessage(
       'join-game',
       {
         agentId: agentInfo.agentId.toString(),
@@ -109,9 +109,13 @@ export class GameService extends Service {
       const message = this.extractTextFromEvent(evt);
       logger.info(`[Game] Event: ${message}`);
 
-      // Update phase if present
-      if (evt.metadata?.phase) {
-        this.gameState.phase = evt.metadata.phase as string;
+      // Map server game events to local phase when available
+      if (evt.metadata && typeof evt.metadata === 'object' && 'gameEvent' in evt.metadata) {
+        const gameEvent = evt.metadata.gameEvent as string | undefined;
+        if (gameEvent) {
+          const mapped = this.mapGameEventToPhase(gameEvent);
+          if (mapped) this.gameState.phase = mapped;
+        }
       }
 
       // Update role if present
@@ -138,6 +142,22 @@ export class GameService extends Service {
     
     const textParts = parts.filter((p) => p.kind === 'text');
     return textParts.map((p) => p.text).join(' ');
+  }
+
+  private mapGameEventToPhase(gameEvent: string): string | null {
+    switch (gameEvent) {
+      case 'game-started':
+        return 'playing';
+      case 'meeting-called':
+      case 'body-reported':
+        return 'discussion';
+      case 'voting-started':
+        return 'voting';
+      case 'game-ended':
+        return 'ended';
+      default:
+        return null;
+    }
   }
 
   // ============================================================================

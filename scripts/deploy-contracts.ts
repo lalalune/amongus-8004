@@ -4,7 +4,7 @@
  */
 
 import { ethers } from 'ethers';
-import { readFileSync, writeFileSync, mkdirSync, copyFileSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 

@@ -9,6 +9,13 @@
 
 set -e
 
+# Load .env if present (exporting all variables)
+if [ -f .env ]; then
+  set -a
+  . ./.env
+  set +a
+fi
+
 # Determine environment
 ENV_MODE="${NODE_ENV:-local}"
 if [ "$ENV_MODE" = "" ] || [ "$ENV_MODE" = "development" ]; then
@@ -19,6 +26,13 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "🎮 Among Us ERC-8004 - Full System Startup"
 echo "   Environment: $ENV_MODE"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+# Ensure workspace dependencies are installed and linked
+echo "📦 Installing workspace dependencies..."
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"/..
+bun install
+echo "✅ Dependencies installed"
 echo ""
 
 # Environment defaults and safety
@@ -54,10 +68,8 @@ if [ "$ENV_MODE" = "local" ]; then
     fi
 
     echo ""
-    echo "🛠️  Building workspace (shared, server, agents)..."
-    bun run build:shared
-    bun run build:server
-    bun run build:agents
+    echo "🛠️  Building workspace via turbo (shared, server, agents)..."
+    bun run build
 
     echo ""
     echo "📝 Deploying ERC-8004 contracts to local Anvil..."
@@ -89,6 +101,10 @@ cd server
 export PORT=3000
 
 # Prefer non-watch mode for stability
+# Fast timers for dev/E2E (can be overridden by env)
+export DISCUSSION_TIME_MS=${DISCUSSION_TIME_MS:-4000}
+export VOTING_TIME_MS=${VOTING_TIME_MS:-3000}
+export KILL_COOLDOWN_MS=${KILL_COOLDOWN_MS:-1000}
 if [ "$ENV_MODE" = "production" ]; then
   bun run start &
 elif [ "$ENV_MODE" = "testnet" ]; then
@@ -121,6 +137,15 @@ if ! curl -sSf http://localhost:3000/.well-known/agent-card.json >/dev/null; the
   echo "❌ Agent Card endpoint not responding"
   exit 1
 fi
+
+echo ""
+echo "🧪 Running scripted E2E against live server (fail-fast)..."
+DISCUSSION_TIME_MS=$DISCUSSION_TIME_MS VOTING_TIME_MS=$VOTING_TIME_MS KILL_COOLDOWN_MS=$KILL_COOLDOWN_MS \
+  bun run scripts/smoke-runtime.ts || {
+    echo "❌ E2E script failed. Stopping services.";
+    kill $SERVER_PID $ANVIL_PID 2>/dev/null || true;
+    exit 1;
+  }
 
 echo ""
 echo "🤖 Starting 5 player agents (manual runtime)..."

@@ -7,6 +7,7 @@
 import express, { type Request, type Response } from 'express';
 import cors from 'cors';
 import { GameEngine } from './game/engine.js';
+import type { GameConfig } from '@elizagames/shared';
 import { createRegistry } from './blockchain/registry.js';
 import { A2AServer } from './a2a/server.js';
 import { generateAgentCard, validateAgentCard } from './a2a/agentCard.js';
@@ -18,8 +19,22 @@ const SERVER_URL = process.env.SERVER_URL || `http://localhost:${PORT}`;
 async function main() {
   console.log('🚀 Starting Among Us ERC-8004 Game Master Server...\n');
 
-  // Initialize game engine
-  const gameEngine = new GameEngine();
+  // Initialize game engine (allow fast timers via env for E2E/dev)
+  const discussionMs = process.env.DISCUSSION_TIME_MS ? parseInt(process.env.DISCUSSION_TIME_MS, 10) : undefined;
+  const votingMs = process.env.VOTING_TIME_MS ? parseInt(process.env.VOTING_TIME_MS, 10) : undefined;
+  const killCooldownMs = process.env.KILL_COOLDOWN_MS ? parseInt(process.env.KILL_COOLDOWN_MS, 10) : undefined;
+  const minPlayers = process.env.MIN_PLAYERS ? parseInt(process.env.MIN_PLAYERS, 10) : undefined;
+  const maxPlayers = process.env.MAX_PLAYERS ? parseInt(process.env.MAX_PLAYERS, 10) : undefined;
+
+  const gameConfig: Partial<GameConfig> = {
+    ...(discussionMs !== undefined ? { discussionTime: discussionMs } : {}),
+    ...(votingMs !== undefined ? { votingTime: votingMs } : {}),
+    ...(killCooldownMs !== undefined ? { killCooldown: killCooldownMs } : {}),
+    ...(minPlayers !== undefined ? { minPlayers } : {}),
+    ...(maxPlayers !== undefined ? { maxPlayers } : {})
+  };
+
+  const gameEngine = new GameEngine(gameConfig);
   console.log('✅ Game engine initialized');
 
   // Initialize ERC-8004 registry
@@ -126,6 +141,16 @@ async function main() {
       rooms: Array.from(ship.rooms.values()),
       vents: Array.from(ship.vents.entries())
     });
+  });
+
+  // Unsafe debug reset endpoint (local/dev only)
+  app.post('/debug/reset', (req: Request, res: Response) => {
+    if (process.env.NODE_ENV && process.env.NODE_ENV !== 'local' && process.env.NODE_ENV !== 'development') {
+      res.status(403).json({ error: 'Debug reset not allowed in this environment' });
+      return;
+    }
+    gameEngine.reset();
+    res.json({ ok: true });
   });
 
   // 404 handler
