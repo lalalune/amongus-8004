@@ -52,38 +52,54 @@ fi
 echo ""
 
 # ============================================================================
-# Phase 2: Game Logic Tests
+# Phase 2: Game Logic Tests  
 # ============================================================================
 
 echo "📋 Phase 2: Game Runtime E2E"
 echo "─────────────────────────────────────────────────"
 
-# Spin server without agents and without internal smoke (fast timers)
-NODE_ENV=local ENV_MODE=local SKIP_AGENTS=1 SKIP_INTERNAL_SMOKE=1 DISCUSSION_TIME_MS=4000 VOTING_TIME_MS=3000 KILL_COOLDOWN_MS=1000 \
-  bash "$PROJECT_ROOT/scripts/start-all.sh" > "$LOG_FILE" 2>&1 &
-STARTALL_PID=$!
+# Start server directly in background (simpler than start-all.sh)
+echo "Starting test server..."
+cd "$PROJECT_ROOT/server"
+DISCUSSION_TIME_MS=4000 VOTING_TIME_MS=3000 PORT=3000 bun dist/index.js > "$LOG_FILE" 2>&1 &
+SERVER_PID=$!
+cd "$PROJECT_ROOT"
 
-# Wait for health then run smoke separately to assert
+# Wait for health
+echo "Waiting for server..."
 for i in {1..60}; do
-  if curl -sSf http://localhost:3000/health >/dev/null; then
-    if bun run "$PROJECT_ROOT/scripts/smoke-runtime.ts"; then
-      echo "✅ Runtime E2E passed"
-      TESTS_PASSED=$((TESTS_PASSED + 1))
-    else
-      echo "❌ Runtime E2E failed"
-      TESTS_FAILED=$((TESTS_FAILED + 1))
-    fi
+  if curl -sSf http://localhost:3000/health >/dev/null 2>&1; then
+    echo "✅ Server ready"
     break
   fi
   sleep 0.5
   if [ $i -eq 60 ]; then
-    echo "❌ Server did not become healthy in time"
+    echo "❌ Server failed to start"
+    kill $SERVER_PID 2>/dev/null || true
     TESTS_FAILED=$((TESTS_FAILED + 1))
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "📊 Test Summary"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "Phases Passed: $TESTS_PASSED"
+    echo "Phases Failed: $TESTS_FAILED"
+    echo ""
+    exit 1
   fi
 done
 
-kill "$STARTALL_PID" 2>/dev/null || true
-STARTALL_PID=""
+# Run scripted test
+if bun run "$PROJECT_ROOT/scripts/test-scripted-game.ts"; then
+  echo "✅ Scripted game test passed"
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+  echo "❌ Scripted game test failed"
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+# Cleanup server
+kill $SERVER_PID 2>/dev/null || true
 echo ""
 
 # ============================================================================

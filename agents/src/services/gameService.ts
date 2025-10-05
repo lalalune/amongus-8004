@@ -98,7 +98,7 @@ export class GameService extends Service {
       await attemptJoin();
     } catch (err) {
       const msg = (err as Error).message || '';
-      if (msg.toLowerCase().includes('in progress')) {
+      if (msg.toLowerCase().includes('in progress') || msg.toLowerCase().includes('already in game')) {
         logger.warn('[Game] Join rejected: game in progress. Retrying periodically...');
         // Schedule periodic retry until success
         if (this.joinRetryTimer) clearInterval(this.joinRetryTimer);
@@ -118,6 +118,10 @@ export class GameService extends Service {
             // keep retrying silently
           }
         }, this.joinRetryIntervalMs) as unknown as NodeJS.Timeout;
+        // Consider ourselves connected even if already in game; we'll poll status without SSE until resubscribed
+        this.gameState.connected = true;
+        this.gameState.phase = 'lobby';
+        this.gameState.lastUpdate = Date.now();
         return;
       } else {
         throw err;

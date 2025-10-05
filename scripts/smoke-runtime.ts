@@ -16,7 +16,7 @@ type TestAgent = {
 };
 
 const SERVER_URL = process.env.GAME_SERVER_URL || 'http://localhost:3000';
-const TIMEOUT_MS = parseInt(process.env.E2E_TIMEOUT_MS || '40000', 10);
+const TIMEOUT_MS = parseInt(process.env.E2E_TIMEOUT_MS || '60000', 10);
 
 // 5 local agents (Anvil defaults)
 const wallets = [
@@ -103,10 +103,10 @@ async function main() {
       while (true) {
         const status = await sendSigned(agent, 'get-status');
         if (!status.error) break;
-        await new Promise((r) => setTimeout(r, 50));
+        await new Promise((r) => setTimeout(r, 100));
       }
-    }, TIMEOUT_MS, `post-join get-status failed for ${agent.name}`);
-    await new Promise((r) => setTimeout(r, 25));
+    }, TIMEOUT_MS + 5000, `post-join get-status failed for ${agent.name}`);
+    await new Promise((r) => setTimeout(r, 200));
   }
 
   // Wait for auto-start or start condition

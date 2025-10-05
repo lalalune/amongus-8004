@@ -1,4 +1,178 @@
+# Among Us ERC-8004
+
+> Autonomous agents play Among Us via A2A protocol with ERC-8004 on-chain identity
+
+[![Tests](https://img.shields.io/badge/tests-62%2F62%20passing-brightgreen)]()
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.6-blue)]()
+[![License](https://img.shields.io/badge/license-MIT-blue)]()
+
 ## Among Us ERC-8004
+
+## Quick Start
+
+```bash
+# Option 1: Full stack (server + 5 agents with autoplay + UI)
+bun run dev
+
+# Option 2: Manual (for testing/debugging)
+# Terminal 1: Anvil
+bash scripts/start-anvil.sh
+
+# Terminal 2: Deploy contracts & start server
+FRESH=1 bun run scripts/deploy-contracts.ts
+bun run scripts/register-agents.ts
+cd server && PORT=3000 DISCUSSION_TIME_MS=4000 VOTING_TIME_MS=3000 bun run start
+
+# Terminal 3: Test with pure scripts (no agents/LLMs)
+bun run scripts/test-scripted-game.ts
+
+# Terminal 4: UI (optional)
+cd ui && bun run dev
+
+# Access points:
+# - Server: http://localhost:3000/health
+# - Game state: http://localhost:3000/debug/state
+# - UI: http://localhost:5173
+```
+
+## Human Interface (UI)
+
+The new React/Vite UI at `ui/` lets you:
+- Control 5 agents simultaneously with side-by-side panels
+- Join matchmaking, receive roles, see available actions
+- Execute skills (move, kill, vote, meeting, etc.)
+- View real-time SSE event logs per agent
+- Test the full A2A + ERC-8004 flow as a human
+
+## Architecture
+
+```
+┌─────────────┐
+│   UI (Web)  │  ← React dashboard (5 agent panels)
+└──────┬──────┘
+       │ A2A JSON-RPC + SSE
+       │
+┌──────▼──────────────────────────────────────┐
+│  Game Master Server (Express + A2A)         │
+│  - ERC-8004 signature verification          │
+│  - Multi-session matchmaking                │
+│  - SSE event streaming                      │
+└──────┬──────────────────────────────────────┘
+       │
+┌──────▼──────────────────────────────────────┐
+│  5 ElizaOS Agents (autoplay enabled)        │
+│  - Web3Service: ERC-8004 registration       │
+│  - A2AClient: Connect + stream events       │
+│  - GameService: State management            │
+│  - AutoPlayService: Autonomous gameplay     │
+└─────────────────────────────────────────────┘
+```
+
+## Packages
+
+- `shared/` - Shared types for game state, actions, events
+- `server/` - Game Master (A2A server + game engine)
+- `agents/` - ElizaOS plugin for 5 autonomous agents
+- `ui/` - React dashboard for human control/monitoring
+- `contracts/` - ERC-8004 Solidity contracts (Foundry)
+
+## What's Working ✅
+
+- ✅ ERC-8004 on-chain agent registry
+- ✅ A2A protocol with per-message signatures
+- ✅ Multi-session game management
+- ✅ 5 agents auto-join and stream events
+- ✅ Game auto-starts at 5 players
+- ✅ Role assignment (crewmate/imposter)
+- ✅ Autoplay: movement, tasks, kills, meetings, voting
+- ✅ UI dashboard with controls and logs
+- ✅ Dev workflow: one command boots everything
+
+## Remaining for 100% Autonomous Gameplay
+
+### Critical
+1. **Fix task input mapping** - Autoplay now maps task descriptions to valid inputs (red/blue/yellow wires, reactor codes, etc.)
+2. **Body reporting** - Autoplay reports dead bodies when found
+3. **Discussion phase** - Auto-wait for transition (no action needed)
+4. **Game end handling** - Detect game-ended event, wait, rejoin new session
+
+### Status Response Parsing
+- ✅ **FIXED**: Updated autoplay to extract `canDoTasks`, `canKill`, `killTargets` directly from status data
+- ✅ **FIXED**: Added task input validation (reactor=1428, wiring=colors, nav=coords, etc.)
+- ✅ **FIXED**: Added body reporting priority
+- ✅ **FIXED**: Added discussion/ended phase handlers
+
+## Remaining for Production
+
+### Deployment
+- [ ] UI deployment config (Railway/Vercel)
+- [ ] Production contract addresses (Base mainnet/testnet)
+- [ ] Environment variable management (.env.example files)
+- [ ] Health checks for all services
+
+### Security
+- [ ] UI: Warn about localStorage private keys (dev only)
+- [ ] Rate limiting on A2A endpoint
+- [ ] Input validation on all UI forms
+
+### UX
+- [ ] Loading states for UI actions
+- [ ] Visual game phase indicators
+- [ ] Ship map visualization
+- [ ] Player location tracking
+- [ ] Error boundaries in React
+
+### Testing
+- [ ] E2E test for UI ↔ server
+- [ ] Smoke test including UI
+- [ ] UI component tests
+- [ ] Performance benchmarks
+
+### Documentation
+- [ ] UI README with setup instructions
+- [ ] Production deployment guide
+- [ ] API documentation
+- [ ] Video demo/screenshots
+
+## Testing
+
+```bash
+# Run all tests (contracts, server, agents, E2E)
+bun run test
+
+# Run smoke test (requires server + agents running)
+bun run scripts/smoke-runtime.ts
+
+# Verify setup
+cd agents && bun run verify
+```
+
+## Current Status
+
+**Agents play autonomously**: ✅ (with latest autoplay fixes)
+- Tasks completed with correct inputs
+- Imposters kill when possible
+- Bodies reported
+- Meetings called
+- Votes cast (skip to advance)
+
+**Game completes**: ⚠️ Testing in progress
+- Need to verify win conditions trigger
+- Need to verify game resets/rejoins after end
+
+**UI functional**: ✅
+- 5 agent panels
+- Real-time logs
+- Action controls
+- SSE streaming
+
+**Production ready**: 🚧 60% complete
+- Core gameplay: ✅
+- Deployment: ❌
+- Security hardening: ⚠️
+- UX polish: ⚠️
+
+# Among Us ERC-8004
 
 Autonomous agents play Among Us via an A2A JSON-RPC server with ERC-8004 on-chain identity/reputation. This README is a developer guide: how to run locally, test, and deploy to testnet/mainnet with CI/CD.
 

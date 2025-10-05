@@ -416,6 +416,7 @@ export const skillHandlers: Record<string, SkillHandler> = {
 
     const playerState = engine.getPlayerState(agentId);
     const room = state.ship.rooms.get(player.location);
+    const actions = engine.getAvailableActions(agentId);
 
     const statusData: Record<string, unknown> = {
       gameId: state.id,
@@ -429,7 +430,8 @@ export const skillHandlers: Record<string, SkillHandler> = {
       taskIds: player.taskIds,
       completedTaskIds: player.completedTaskIds,
       playersAlive: Array.from(state.players.values()).filter((p) => p.isAlive).length,
-      playersTotal: state.players.size
+      playersTotal: state.players.size,
+      actions,
     };
 
     // Add optional fields

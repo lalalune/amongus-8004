@@ -215,23 +215,26 @@ export class A2AServer {
     let targetEngine: GameEngine | null = null;
     if (this.sessions) {
       if (skillId === 'join-game') {
-        // Join uses lobby assignment, but prefer existing mapping (or existing presence)
-        targetEngine =
-          this.sessions.getEngineForAgent(agentId) ||
-          this.sessions.getEngineContainingAgent(agentId) ||
-          this.sessions.assignLobby(agentId);
+        // Join uses lobby assignment, but prefer existing mapping
+        targetEngine = this.sessions.getEngineForAgent(agentId) || this.sessions.assignLobby(agentId);
       } else {
-        // Resolve by mapping; as a fallback heal races by scanning sessions for existing presence
-        targetEngine = this.sessions.getEngineForAgent(agentId) || this.sessions.getEngineContainingAgent(agentId);
+        targetEngine = this.sessions.getEngineForAgent(agentId);
         if (!targetEngine) {
-          res.json(
-            createErrorResponse(
-              request.id ?? null,
-              A2A_ERROR_CODES.INVALID_PARAMS,
-              'Agent is not in a game. Use join-game first.'
-            )
-          );
-          return;
+          console.log(`[Sessions] ERROR: No engine found for ${agentId}, checking if player exists in any engine...`);
+          targetEngine = this.sessions.getEngineContainingAgent(agentId);
+          if (targetEngine) {
+            console.log(`[Sessions] Found ${agentId} in engine ${targetEngine.getState().id}, updating mapping`);
+            this.sessions.setAgentGame(agentId, targetEngine.getState().id);
+          } else {
+            res.json(
+              createErrorResponse(
+                request.id ?? null,
+                A2A_ERROR_CODES.INVALID_PARAMS,
+                'Agent is not in a game. Use join-game first.'
+              )
+            );
+            return;
+          }
         }
       }
     } else {
@@ -243,6 +246,12 @@ export class A2AServer {
       // Bind mapping now that address is validated
       if (!boundAddress) {
         this.agentBindings.set(agentId, signatureValidation.address!);
+      }
+      // CRITICAL: Set session mapping BEFORE executing skill so subsequent calls work
+      if (this.sessions) {
+        const gameId = targetEngine.getState().id;
+        this.sessions.setAgentGame(agentId, gameId);
+        console.log(`[Sessions] Mapped ${agentId} → game ${gameId}`);
       }
     }
 
@@ -297,11 +306,8 @@ export class A2AServer {
       const responseEvent = createSuccessResponse(request.id ?? null, task);
       res.write(`data: ${JSON.stringify(responseEvent)}\n\n`);
 
-      // If join-game, check auto-start and record session mapping
+      // If join-game, check auto-start (mapping already set before executeSkill)
       if (skillId === 'join-game') {
-        if (this.sessions) {
-          this.sessions.setAgentGame(agentId, gameId);
-        }
         const canStart = targetEngine.canStartGame();
         if (canStart.canStart) {
           setTimeout(() => targetEngine.startGame(), 2000);
@@ -313,13 +319,6 @@ export class A2AServer {
       }
     } else {
       // Non-streaming response
-      // For non-streaming join, record mapping BEFORE responding to avoid race with immediate follow-up calls
-      if (skillId === 'join-game') {
-        if (this.sessions) {
-          this.sessions.setAgentGame(agentId, gameId);
-        }
-      }
-
       const responseMessage = createMessage(
         'agent',
         [createTextPart(result.message), ...(result.data ? [createDataPart(result.data)] : [])],
@@ -330,7 +329,7 @@ export class A2AServer {
 
       res.json(createSuccessResponse(request.id ?? null, responseMessage));
 
-      // Auto-start and cleanup mapping for leave after responding
+      // For non-streaming join, auto-start if ready (mapping already set before executeSkill)
       if (skillId === 'join-game') {
         const canStart = targetEngine.canStartGame();
         if (canStart.canStart) {

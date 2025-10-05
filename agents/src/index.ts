@@ -39,6 +39,7 @@ const createAgentRuntime = async (
         AGENT_PRIVATE_KEY: privateKey,
       },
       OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
+      AGENT_AUTOPLAY: process.env.AGENT_AUTOPLAY || '0',
       ...character.settings,
     },
   };

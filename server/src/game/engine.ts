@@ -940,7 +940,7 @@ export class GameEngine {
 
   getAvailableActions(agentId: string): {
     canMove: string[];
-    canDoTasks: Array<{ taskId: string; description: string; currentStep: number; totalSteps: number }>;
+    canDoTasks: Array<{ taskId: string; description: string; currentStep: number; totalSteps: number; nextStepDescription?: string }>;
     canKill: boolean;
     killTargets: string[];
     canVent: boolean;
@@ -969,7 +969,7 @@ export class GameEngine {
     const currentRoom = this.state.ship.rooms.get(player.location);
     const result = {
       canMove: currentRoom?.connectedRooms || [],
-      canDoTasks: [] as Array<{ taskId: string; description: string; currentStep: number; totalSteps: number }>,
+      canDoTasks: [] as Array<{ taskId: string; description: string; currentStep: number; totalSteps: number; nextStepDescription?: string }>,
       canKill: false,
       killTargets: [] as string[],
       canVent: false,
@@ -987,11 +987,13 @@ export class GameEngine {
           const task = this.state.tasks.get(taskId);
           if (task && task.room === player.location) {
             const currentStep = player.taskSteps.get(taskId) || 0;
+            const nextStepDescription = task.steps[currentStep]?.description || '';
             result.canDoTasks.push({
               taskId,
               description: task.description,
               currentStep,
-              totalSteps: task.steps.length
+              totalSteps: task.steps.length,
+              nextStepDescription,
             });
           }
         }

@@ -64,9 +64,9 @@ if [ "$ENV_MODE" = "local" ]; then
             echo "♻️  Fresh flag set: restarting Anvil..."
             pkill -f anvil || true
             sleep 1
-            echo "🔨 Starting Anvil blockchain..."
+            echo "🔨 Starting Anvil blockchain... (silenced)"
             SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-            bash "$SCRIPT_DIR/start-anvil.sh" &
+            bash "$SCRIPT_DIR/start-anvil.sh" >/dev/null 2>&1 &
             ANVIL_PID=$!
             sleep 3
             echo "✅ Anvil started (PID: $ANVIL_PID)"
@@ -75,9 +75,9 @@ if [ "$ENV_MODE" = "local" ]; then
             echo "✅ Anvil already running on port 8545"
         fi
     else
-        echo "🔨 Starting Anvil blockchain..."
+        echo "🔨 Starting Anvil blockchain... (silenced)"
         SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-        bash "$SCRIPT_DIR/start-anvil.sh" &
+        bash "$SCRIPT_DIR/start-anvil.sh" >/dev/null 2>&1 &
         ANVIL_PID=$!
         sleep 3
         echo "✅ Anvil started (PID: $ANVIL_PID)"
@@ -86,19 +86,28 @@ if [ "$ENV_MODE" = "local" ]; then
 
     echo ""
     echo "🛠️  Building workspace via turbo (shared, server, agents)..."
-    bun run build
+    if [ -z "$SKIP_UI" ]; then
+      ./node_modules/.bin/turbo run build --cache=local:r
+    else
+      ./node_modules/.bin/turbo run build
+    fi
 
     echo ""
     echo "📝 Deploying ERC-8004 contracts to local Anvil..."
     if [ $FRESH_FLAG -eq 1 ]; then
-      FRESH=1 bun run deploy:contracts --fresh
+      FRESH=1 bun run deploy:contracts --fresh || DEPLOY_STATUS=$?
     else
-      bun run deploy:contracts
+      bun run deploy:contracts || DEPLOY_STATUS=$?
     fi
 
-    if [ $? -ne 0 ]; then
-        echo "❌ Contract deployment failed"
-        exit 1
+    if [ -n "$DEPLOY_STATUS" ] && [ "$DEPLOY_STATUS" -ne 0 ]; then
+        echo "⚠️  Contract deployment failed; attempting to continue if contracts/addresses.json exists"
+        if [ -f contracts/addresses.json ]; then
+          echo "ℹ️  Found contracts/addresses.json; proceeding without fresh deploy"
+        else
+          echo "❌ No contracts/addresses.json present; cannot proceed without deployment"
+          exit 1
+        fi
     fi
 
     echo ""
@@ -109,6 +118,9 @@ if [ "$ENV_MODE" = "local" ]; then
         echo "❌ Agent registration failed"
         exit 1
     fi
+    
+    # Note: Registration happens regardless of SKIP_AGENTS flag
+    # The server needs agents registered even for scripted tests
 else
     echo "ℹ️  $ENV_MODE mode - using existing blockchain and contracts"
     echo "   Make sure contracts are deployed, agents registered, and .env configured"
@@ -148,16 +160,16 @@ fi
 SERVER_PID=$!
 cd ..
 
-# Wait for server readiness on :3000/health with timeout
+# Wait for server readiness on :3000/health with extended timeout
 printf "⏳ Waiting for server health on http://localhost:3000/health"
-for i in {1..40}; do
+for i in {1..120}; do
   if curl -sSf http://localhost:3000/health >/dev/null; then
     echo "\n✅ Server is healthy"
     break
   fi
   printf "."
   sleep 0.5
-  if [ $i -eq 40 ]; then
+  if [ $i -eq 120 ]; then
     echo "\n❌ Server failed to become healthy"
     exit 1
   fi
@@ -185,9 +197,10 @@ if [ "$ENV_MODE" = "local" ]; then
     # Rebuild agents to ensure dist is up-to-date
     bun run build >/dev/null 2>&1 || true
     
-    # Start agents
+    # Start agents (log to console rather than file)
     GAME_SERVER_URL="http://localhost:3000" \
     RPC_URL="http://localhost:8545" \
+    AGENT_AUTOPLAY="1" \
     OPENAI_API_KEY="$OPENAI_API_KEY" \
     AUTO_SHUTDOWN_MS="$AUTO_SHUTDOWN_MS" \
     PLAYER1_PRIVATE_KEY="$PLAYER1_PRIVATE_KEY" \
@@ -195,12 +208,36 @@ if [ "$ENV_MODE" = "local" ]; then
     PLAYER3_PRIVATE_KEY="$PLAYER3_PRIVATE_KEY" \
     PLAYER4_PRIVATE_KEY="$PLAYER4_PRIVATE_KEY" \
     PLAYER5_PRIVATE_KEY="$PLAYER5_PRIVATE_KEY" \
-    bun dist/index.js > logs/agents-orch.log 2>&1 &
+    bun dist/index.js &
     AGENTS_PID=$!
     cd ..
   else
     echo "ℹ️  SKIP_AGENTS is set; not launching agents."
   fi
+fi
+
+# Optionally start the UI (local only)
+if [ "$ENV_MODE" = "local" ] && [ -z "$SKIP_UI" ]; then
+  echo ""
+  echo "🖥️  Starting UI (Vite) on :5173..."
+  cd ui
+  bun install >/dev/null 2>&1 || true
+  bun run dev > ../scripts/ui.log 2>&1 &
+  UI_PID=$!
+  cd ..
+  # Wait for UI dev server to be reachable (up to 60s)
+  printf "⏳ Waiting for UI on http://localhost:5173"
+  for i in {1..120}; do
+    if curl -sSf http://localhost:5173 >/dev/null 2>&1; then
+      echo "\n✅ UI is running"
+      break
+    fi
+    printf "."
+    sleep 0.5
+    if [ $i -eq 120 ]; then
+      echo "\n⚠️  UI failed to start (check scripts/ui.log)"
+    fi
+  done
 fi
 
 # Wait a bit, then verify streaming connections and log status
@@ -217,6 +254,7 @@ echo "📊 Access Points:"
 echo "  Agent Card:  http://localhost:3000/.well-known/agent-card.json"
 echo "  Health:      http://localhost:3000/health"
 echo "  Game State:  http://localhost:3000/debug/state"
+echo "  UI:          http://localhost:5173"
 echo ""
 echo "PIDs: server=$SERVER_PID agents=$AGENTS_PID"
 echo "Streaming connections: $CONN"
@@ -224,7 +262,7 @@ echo ""
 echo "Press Ctrl+C to stop all services"
 
 # Handle shutdown
-trap "echo '\n🛑 Shutting down...'; kill $SERVER_PID $AGENTS_PID 2>/dev/null; if [ $FRESH_FLAG -eq 1 ] && [ $ANVIL_WAS_STARTED -eq 1 ]; then kill $ANVIL_PID 2>/dev/null; fi; exit" INT TERM
+trap "echo '\n🛑 Shutting down...'; kill $SERVER_PID $AGENTS_PID $UI_PID 2>/dev/null; if [ $FRESH_FLAG -eq 1 ] && [ $ANVIL_WAS_STARTED -eq 1 ]; then kill $ANVIL_PID 2>/dev/null; fi; exit" INT TERM
 
 wait
 

@@ -41,13 +41,21 @@ export class ERC8004Registry {
   // ============================================================================
 
   async isAgentRegistered(address: string): Promise<boolean> {
-    const result = await this.identityContract.getAgent(await this.getAgentIdByAddress(address));
-    return result.agentId_ !== 0n;
+    try {
+      const result = await this.identityContract.resolveAgentByAddress(address);
+      return result && result.agentId_ !== undefined && result.agentId_ !== 0n;
+    } catch {
+      return false;
+    }
   }
 
   async getAgentIdByAddress(address: string): Promise<bigint> {
-    const result = await this.identityContract.resolveAgentByAddress(address);
-    return result.agentId_;
+    try {
+      const result = await this.identityContract.resolveAgentByAddress(address);
+      return result.agentId_ || 0n;
+    } catch {
+      return 0n;
+    }
   }
 
   async getAgentIdByDomain(domain: string): Promise<bigint> {
@@ -82,24 +90,14 @@ export class ERC8004Registry {
   }
 
   async registerAgent(domain: string, address: string): Promise<bigint> {
-    const tx = await this.identityContract.newAgent(domain, address);
-    const receipt = await tx.wait();
+    // Call static first to get the return value
+    const agentId = await this.identityContract.newAgent.staticCall(domain, address);
     
-    // Parse AgentRegistered event
-    const event = receipt.logs
-      .map((log: ethers.Log) => {
-        return this.identityContract.interface.parseLog({
-          topics: log.topics as string[],
-          data: log.data
-        });
-      })
-      .find((e: ethers.LogDescription | null) => e?.name === 'AgentRegistered');
-
-    if (!event) {
-      throw new Error('AgentRegistered event not found in transaction receipt');
-    }
-
-    return event.args.agentId;
+    // Now execute the transaction
+    const tx = await this.identityContract.newAgent(domain, address);
+    await tx.wait();
+    
+    return agentId;
   }
 
   async updateAgent(agentId: bigint, newDomain?: string, newAddress?: string): Promise<boolean> {

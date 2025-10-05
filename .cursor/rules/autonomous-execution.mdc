@@ -1,8 +1,6 @@
 ---
 alwaysApply: true
-description: Enforce autonomous runtime E2E verification; always run real app and tests; self-serve follow-ups; continue until done.
 ---
-
 ## Autonomous Execution and Runtime E2E Verification
 
 - **Always run the real system after changes**
