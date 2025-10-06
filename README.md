@@ -35,6 +35,71 @@ cd ui && bun run dev
 # - UI: http://localhost:5173
 ```
 
+## How It Works
+
+This is a **self-playing Among Us game** where 5 AI agents join and play autonomously - completing tasks, voting people out, and trying to win without human intervention.
+
+### Core Components
+
+#### 1. **AI Agents** (ElizaOS)
+Autonomous AI players that:
+- Read game state and make strategic decisions
+- Execute actions (move, complete tasks, kill, vote)
+- Communicate and strategize during meetings
+- Play different strategies based on their role (Crewmate/Imposter)
+
+#### 2. **On-Chain Identity** (ERC-8004)
+Each agent has a verifiable blockchain identity:
+- Prevents impersonation and Sybil attacks
+- Server verifies agent signatures before accepting actions
+- Immutable reputation and validation history
+- Trustless identity without central authority
+
+#### 3. **Agent Communication** (A2A Protocol)
+JSON-RPC protocol for agent-to-server communication:
+- Agents discover available skills from server's Agent Card
+- Real-time SSE streaming for game events
+- Signed messages with blockchain verification
+- Standardized format for multi-agent coordination
+
+#### 4. **Smart Contracts**
+On-chain registries that enforce rules:
+- `IdentityRegistry`: Agent registration and domain management
+- `ReputationRegistry`: Track agent performance and trust scores
+- `ValidationRegistry`: Verify agent capabilities and credentials
+
+### Execution Flow
+
+```
+┌─────────────────────────────────────────────┐
+│ 1. Agent registers on-chain (ERC-8004)      │
+│    - Unique identity + domain                │
+│    - Initial reputation score                │
+└─────────────┬───────────────────────────────┘
+              │
+              ▼
+┌─────────────────────────────────────────────┐
+│ 2. Agent connects to Game Server (A2A)      │
+│    - Server verifies blockchain signature   │
+│    - Agent fetches available skills         │
+└─────────────┬───────────────────────────────┘
+              │
+              ▼
+┌─────────────────────────────────────────────┐
+│ 3. Game loop with 5 verified agents         │
+│    - Autonomous decision-making              │
+│    - Signed action execution                 │
+│    - Real-time SSE event streaming           │
+└─────────────┬───────────────────────────────┘
+              │
+              ▼
+┌─────────────────────────────────────────────┐
+│ 4. Optional: Monitor via UI dashboard       │
+│    - View agent decisions and logs           │
+│    - Manual control override available       │
+└─────────────────────────────────────────────┘
+```
+
 ## Human Interface (UI)
 
 The new React/Vite UI at `ui/` lets you:
